@@ -185,7 +185,9 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         # reshape B, T, ... to B*T
         this_nobs = dict_apply(nobs, 
             lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+        # print(this_nobs.keys())
         nobs_features = self.obs_encoder(this_nobs)
+        # print(nobs_features.shape)
         # reshape back to B, To, Do
         nobs_features = nobs_features.reshape(B,To,-1)
 
@@ -200,8 +202,8 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         samples = action_dist.sample((B, self.pred_n_samples, Ta)).to(
             dtype=dtype)
         # (B, N, Ta, Da)
-        print("Number of iterations", self.pred_n_iter)
-        print(nobs_features.shape)
+        # print("Number of iterations", self.pred_n_iter)
+        # print(nobs_features.shape)
 
         if self.kevin_inference:
             # kevin's implementation
@@ -322,3 +324,83 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             assert value.shape[0] * n_repeats == Da
             repeated_stats[key] = value.repeat(n_repeats)
         return repeated_stats
+
+
+    def action_dist(self, obs_dict: Dict[str, torch.Tensor]):
+        """
+        obs_dict: must include "obs" key
+        result: must include "action" key
+        """
+        assert 'past_action' not in obs_dict # not implemented yet
+        # normalize input
+        nobs = self.normalizer.normalize(obs_dict)
+        value = next(iter(nobs.values()))
+        B, To = value.shape[:2]
+        T = self.horizon
+        Ta = self.n_action_steps    # 1 for lift
+        Da = self.action_dim    # 7 for lift
+        Do = self.obs_feature_dim #137 for lift
+        To = self.n_obs_steps
+        # build input
+        device = self.device
+        dtype = self.dtype
+
+        # encode obs
+        # reshape B, T, ... to B*T
+        this_nobs = dict_apply(nobs, 
+            lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+        # print(this_nobs.keys())
+        nobs_features = self.obs_encoder(this_nobs)
+        # print(nobs_features.shape)
+        # reshape back to B, To, Do
+        nobs_features = nobs_features.reshape(B,To,-1)
+
+        # only take necessary obs
+        naction_stats = self.get_naction_stats()
+
+        # first sample
+        action_dist = torch.distributions.Uniform(
+            low=naction_stats['min'],
+            high=naction_stats['max']
+        )
+        samples = action_dist.sample((B, self.pred_n_samples, Ta)).to(
+            dtype=dtype)
+
+        # (B, N, Ta, Da).  (B, 1024, 1, 7) for lift
+        # print("Number of iterations", self.pred_n_iter)
+        # print(nobs_features.shape)
+
+        if self.kevin_inference:
+            # kevin's implementation
+            noise_scale = 3e-2
+            for i in range(self.pred_n_iter):
+                # Compute energies.
+                logits = self.forward(nobs_features, samples)
+                probs = F.softmax(logits, dim=-1)
+
+                # Resample with replacement.
+                idxs = torch.multinomial(probs, self.pred_n_samples, replacement=True)
+                samples = samples[torch.arange(samples.size(0)).unsqueeze(-1), idxs]
+
+                # Add noise and clip to target bounds.
+                samples = samples + torch.randn_like(samples) * noise_scale
+                samples = samples.clamp(min=naction_stats['min'], max=naction_stats['max'])
+
+            # Return target with highest probability.
+            logits = self.forward(nobs_features, samples)
+            probs = F.softmax(logits, dim=-1)
+            return probs
+        else:
+            # andy's implementation
+            zero = torch.tensor(0, device=self.device)
+            resample_std = torch.tensor(3e-2, device=self.device)
+            for i in range(self.pred_n_iter):
+                # Forward pass.
+                logits = self.forward(nobs_features, samples) # (B, N)
+                prob = torch.softmax(logits, dim=-1)
+
+                if i < (self.pred_n_iter - 1):
+                    idxs = torch.multinomial(prob, self.pred_n_samples, replacement=True)
+                    samples = samples[torch.arange(samples.size(0)).unsqueeze(-1), idxs]
+                    samples += torch.normal(zero, resample_std, size=samples.shape, device=self.device)
+            return prob

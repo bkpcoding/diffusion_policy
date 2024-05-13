@@ -54,9 +54,8 @@ def main(checkpoint, output_dir, device, attack, log, epsilon):
     # if attack then change the environment to adversarial environment
     if attack == 'True':
         print("Running adversarial Attack")
-        cfg.task.env_runner['_target_'] = 'diffusion_policy.env_runner.robomimic_image_runner.AdversarialRobomimicImageRunner'
-        cfg.task.env_runner['n_envs'] = 4
-        cfg.task.env_runner['epsilon'] = epsilon
+        cfg.task.env_runner['_target_'] = 'diffusion_policy.env_runner.robomimic_image_runner.AdversarialRobomimicImageRunnerIBC'
+        cfg.task.env_runner['n_envs'] = 1
 
     # Get the absolute path of the current directory
     current_dir = os.getcwd()
@@ -79,7 +78,10 @@ def main(checkpoint, output_dir, device, attack, log, epsilon):
     env_runner = hydra.utils.instantiate(
         cfg.task.env_runner,
         output_dir=output_dir)
-    runner_log = env_runner.run(policy)
+    if attack == 'True':
+        runner_log = env_runner.run(policy, epsilon)
+    else:
+        runner_log = env_runner.run(policy)
     
     # dump log to json
     json_log = dict()

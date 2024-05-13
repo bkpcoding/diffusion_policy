@@ -12,8 +12,9 @@ import json
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.env_runner.robomimic_image_runner import AdversarialRobomimicImageRunner
 from omegaconf import OmegaConf
-
-@hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_adversarial')
+# torch.backends.cudnn.enabled = False
+@hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_adversarial')
+# @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_adversarial')
 def main(cfg):
     checkpoint = cfg.checkpoint
     task = cfg.task
@@ -24,18 +25,18 @@ def main(cfg):
     log = cfg.log
     epsilons = cfg.epsilons
     dataset_path = cfg.dataset_path
-    print(epsilons)
+    view = cfg.view
+
+    if log:
+        wandb.init(project='BC_Evaluation', name=f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-\
+        {checkpoint.split("/")[-3]}-adversarial_on_{view}' if attack else\
+        f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-{checkpoint.split("/")[-3]}')
 
     for epsilon in epsilons:
         # the output directory should depend on the current directory and the checkpoint path and the attack type and epsilon
-        output_dir = os.path.join(os.getcwd(), f"diffusion_policy/data/experiments/image/{task}/{algo}/eval_{checkpoint.split('/')[-3]}")
+        output_dir = os.path.join(os.getcwd(), f"diffusion_policy/data/experiments/image/{task}/{algo}/eval_{checkpoint.split('/')[-3]}_{epsilon}_{view}")
         if os.path.exists(output_dir):
             raise ValueError(f"Output path {output_dir} already exists!")
-
-        if log:
-            wandb.init(project='BC_Evaluation', name=f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-\
-            {checkpoint.split("/")[-3]}-adversarial_{epsilon}' if attack else\
-            f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-{checkpoint.split("/")[-3]}')
 
         pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -47,6 +48,7 @@ def main(cfg):
         workspace.load_payload(payload, exclude_keys=None, include_keys=None)
 
         policy = workspace.model
+        print(policy)
 
         if attack:
             print("Running adversarial Attack")
@@ -68,7 +70,7 @@ def main(cfg):
             cfg_loaded.task.env_runner,
             output_dir=output_dir)
         if attack:
-            runner_log = env_runner.run(policy, epsilon)
+            runner_log = env_runner.run(policy, epsilon, cfg)
         else:
             runner_log = env_runner.run(policy)
 
@@ -79,10 +81,11 @@ def main(cfg):
             else:
                 json_log[key] = value
         if log:
-            wandb.log({"test/mean_score": json_log["test/mean_score"], "train/mean_score": json_log["train/mean_score"]})
-            wandb.finish()
+            wandb.log({"test/mean_score": json_log["test/mean_score"], "train/mean_score": json_log["train/mean_score"], \
+                "Epsilon":float(epsilon)})
         out_path = os.path.join(output_dir, 'eval_log.json')
         json.dump(json_log, open(out_path, 'w'), indent=2, sort_keys=True)
+    wandb.finish()
 
 if __name__ == '__main__':
     main()
