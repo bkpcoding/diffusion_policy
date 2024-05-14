@@ -56,7 +56,6 @@ def main(checkpoint, output_dir, device, attack, log, epsilon):
         print("Running adversarial Attack")
         cfg.task.env_runner['_target_'] = 'diffusion_policy.env_runner.robomimic_image_runner.AdversarialRobomimicImageRunnerIBC'
         cfg.task.env_runner['n_envs'] = 1
-
     # Get the absolute path of the current directory
     current_dir = os.getcwd()
 

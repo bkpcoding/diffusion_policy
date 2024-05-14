@@ -634,6 +634,36 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    def apply_fgsm_attack_loss_of_ibc(self, obs_dict, policy:BaseImagePolicy, cfg):
+        # use the same loss as the policy
+        view = cfg.view
+        if view == 'both':
+            views = ['agentview_image', 'robot0_eye_in_hand_image']                
+        elif isinstance(view, list):
+            views = view
+        elif isinstance(view, str):
+            views = [view]
+        else:
+            raise ValueError("view must be a string or a list of strings")
+
+        obs_dict = dict_apply(obs_dict, lambda x: x.clone().detach().requires_grad_(True))
+        policy.zero_grad()
+
+        with torch.no_grad():
+            actions = policy.predict_action(obs_dict)['action']
+        batch = {}
+        batch['obs'] = obs_dict
+        batch['action'] = actions
+        
+        loss = policy.compute_loss(batch)
+        loss.backward()
+        for view in views:
+            grad = torch.sign(obs_dict[view].grad)
+            obs_dict[view] = obs_dict[view] + self.epsilon * grad
+            obs_dict[view] = torch.clamp(obs_dict[view], 0, 1)
+        return obs_dict
+
+
     def apply_fgsm_attack(self, obs_dict, policy:BaseImagePolicy, cfg):
         view = cfg.view
         if view == 'both':
@@ -805,6 +835,8 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                 # apply attack
                 if cfg.attack_type == 'fgsm':
                     obs_dict = self.apply_fgsm_attack(obs_dict, policy, cfg)
+                elif cfg.attack_type == 'fgsm_alt':
+                    obs_dict = self.apply_fgsm_attack_loss_of_ibc(obs_dict, policy, cfg)
                 elif cfg.attack_type == 'pgd':
                     obs_dict = self.apply_pgd_attack(obs_dict, policy, cfg)
                 elif cfg.attack_type == 'noise':

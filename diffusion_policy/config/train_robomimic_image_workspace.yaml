@@ -9,7 +9,7 @@ task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
-horizon: &horizon 10
+horizon: &horizon 1
 n_obs_steps: 1
 n_action_steps: 1
 n_latency_steps: 0
@@ -20,7 +20,7 @@ keypoint_visible_rate: 1.0
 policy:
   _target_: diffusion_policy.policy.robomimic_image_policy.RobomimicImagePolicy
   shape_meta: ${shape_meta}
-  algo_name: bc_rnn
+  algo_name: bc
   obs_type: image
   # oc.select resolver: key, default
   task_name: ${oc.select:task.task_name,lift}
@@ -29,14 +29,14 @@ policy:
 
 dataloader:
   batch_size: 64
-  num_workers: 16
+  num_workers: 10
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
   batch_size: 64
-  num_workers: 16
+  num_workers: 10
   shuffle: False
   pin_memory: True
   persistent_workers: False
@@ -47,13 +47,13 @@ training:
   debug: False
   resume: True
   # optimization
-  num_epochs: 3050
+  num_epochs: 600
   # training loop control
   # in epochs
-  rollout_every: 50
-  checkpoint_every: 50
-  val_every: 1
-  sample_every: 5
+  rollout_every: 100
+  checkpoint_every: 100
+  val_every: 100
+  sample_every: 100
   # steps per epoch
   max_train_steps: null
   max_val_steps: null
@@ -61,10 +61,10 @@ training:
   tqdm_interval_sec: 1.0
 
 logging:
-  project: diffusion_policy_debug
+  project: BC_Evaluation
   resume: True
   mode: online
-  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}_${training.seed}_${policy.algo_name}
   tags: ["${name}", "${task_name}", "${exp_name}"]
   id: null
   group: null
