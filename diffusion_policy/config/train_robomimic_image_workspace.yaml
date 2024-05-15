@@ -43,7 +43,7 @@ val_dataloader:
 
 training:
   device: "cuda:0"
-  seed: 42
+  seed: 1023
   debug: False
   resume: True
   # optimization

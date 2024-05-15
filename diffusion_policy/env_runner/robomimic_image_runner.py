@@ -421,6 +421,7 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
         loss = mse_loss(predicted_means, means)
         loss.backward()
         for view in views:
+            assert obs_dict_copy[view].grad_fn is not None, "Input tensor does not have a grad_fn"
             grad = torch.sign(obs_dict[view].grad)
             obs_dict[view] = obs_dict[view] + self.epsilon * grad
             obs_dict[view] = torch.clamp(obs_dict[view], clip_min, clip_max)
@@ -459,7 +460,7 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
                 obs_dict[view] = obs_dict[view] + perturbation
 
         for i in range(num_iter):
-            adv_obs_dict = self.apply_fgsm_attack(obs_dict, policy, cfg)
+            adv_obs_dict = self.apply_fgsm_attack(obs_dict, policy, cfg, target_actions)
             for view in views:
                 perturbation = adv_obs_dict[view] - obs_dict[view]
                 if norm == 'l2':
@@ -634,7 +635,7 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def apply_fgsm_attack_loss_of_ibc(self, obs_dict, policy:BaseImagePolicy, cfg):
+    def apply_fgsm_attack_loss_of_ibc(self, obs_dict, policy:BaseImagePolicy, cfg, actions = None):
         # use the same loss as the policy
         view = cfg.view
         if view == 'both':
@@ -646,21 +647,38 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
         else:
             raise ValueError("view must be a string or a list of strings")
 
-        obs_dict = dict_apply(obs_dict, lambda x: x.clone().detach().requires_grad_(True))
+        # create a copy of the original obs_dict that requires grad for backward pass
+        obs_dict_copy = dict_apply(obs_dict, lambda x: x.clone().detach().requires_grad_(True))
+         # retain the grad on the non-leaf tensor, i.e. the input tensor
+        for view in views:
+            obs_dict_copy[view].retain_grad()
         policy.zero_grad()
 
-        with torch.no_grad():
-            actions = policy.predict_action(obs_dict)['action']
-        batch = {}
-        batch['obs'] = obs_dict
-        batch['action'] = actions
-        
-        loss = policy.compute_loss(batch)
-        loss.backward()
+        assert actions is not None, "Actions must be provided for IBC loss"
+        # create a model prediction as ground truth
+        # batch = {}
+        # batch['obs'] = obs_dict_copy
+        # batch['action'] = actions
+
+        loss, obs_dict_copy, obs_features = policy.compute_loss_with_grad(obs_dict_copy, actions)
         for view in views:
-            grad = torch.sign(obs_dict[view].grad)
-            obs_dict[view] = obs_dict[view] + self.epsilon * grad
-            obs_dict[view] = torch.clamp(obs_dict[view], 0, 1)
+            print("Obs dict copy is leaf? ", obs_dict_copy[view].is_leaf)
+        print("Loss: ", loss)
+        loss.backward()
+        # print("Observation features and its grad ", obs_features, obs_features.grad)
+        for view in views:
+            # check if the grad is not None
+            assert obs_dict_copy[view].grad is not None, "Input tensor does not have a grad"
+            grad = torch.sign(obs_dict_copy[view].grad)
+            print("Grad: ", grad)
+            if obs_dict[view].grad is not None:
+                obs_dict[view].grad.zero_()  # Clear gradients for obs_dict to save memory
+            # print("Grad: ", grad)
+            if cfg.rand_target:
+                obs_dict[view] = obs_dict[view] - self.epsilon * grad
+            else:
+                obs_dict[view] = obs_dict[view] + self.epsilon * grad
+            obs_dict[view] = torch.clamp(obs_dict[view], cfg.clip_min, cfg.clip_max)
         return obs_dict
 
 
@@ -697,12 +715,19 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
         # print(predicted_action.grad_fn, action.grad_fn)
         cross_entropy_loss = torch.nn.CrossEntropyLoss()
         loss = cross_entropy_loss(predicted_action_dist, action_dist)
+        if loss == 0:
+            return obs_dict
         loss.backward()
         for view in views:
+            print("Grad: ", obs_dict[view].grad)
+            # check if all the values of the grad are zeros
+            assert torch.all(obs_dict[view].grad == 0), "Input tensor grad are all zeros"
             grad = torch.sign(obs_dict[view].grad)
             obs_dict[view] = obs_dict[view] + self.epsilon * grad
             obs_dict[view] = torch.clamp(obs_dict[view], 0, 1)
-        # obs_dict['agentview_image'].requires_grad = False
+            if obs_dict[view].grad is not None:
+                obs_dict[view].grad.zero_()  # Clear gradients for obs_dict
+        torch.cuda.empty_cache()
         return obs_dict
 
     def apply_pgd_attack(self, obs_dict, policy:BaseImagePolicy, 
@@ -736,9 +761,18 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                 perturbation = torch.clamp(perturbation, -eta_bound, eta_bound)
                 perturbation = torch.clamp(obs_dict[view] + perturbation, clip_min, clip_max) - obs_dict[view]
                 obs_dict[view] = obs_dict[view] + perturbation
-        
+        if cfg.rand_target:
+            target_actions = torch.FloatTensor(obs_dict['agentview_image'].shape[0], \
+                        self.n_action_steps, cfg.action_space[0]).uniform_(0, 1).to(obs_dict['agentview_image'].device)
+        else:
+            target_actions = policy.predict_action(obs_dict_copy)['action']
+        # add a dummy action at the beginning to get the shape right while
+        # computing loss but it won't be used in the loss computation
+        target_actions = torch.cat([torch.zeros_like(target_actions[:,0:1]), target_actions], dim=1)
+
         for i in range(num_iter):
-            adv_obs_dict = self.apply_fgsm_attack(obs_dict, policy, views)
+            policy.zero_grad()
+            adv_obs_dict = self.apply_fgsm_attack_loss_of_ibc(obs_dict, policy, cfg, target_actions)
             for view in views:
                 perturbation = adv_obs_dict[view] - obs_dict[view]
                 if norm == 'l2':
@@ -747,7 +781,8 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                     perturbation = torch.clamp(perturbation, -self.epsilon, self.epsilon)
                 obs_dict[view] = obs_dict[view] + perturbation
                 obs_dict[view] = torch.clamp(obs_dict[view], clip_min, clip_max)
-
+            # print mean perturbation
+            print("Mean perturbation: ", torch.mean(perturbation))
         return obs_dict
 
     def apply_noise_attack(self, obs_dict, policy:BaseImagePolicy, cfg):
@@ -816,6 +851,7 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                 leave=False, mininterval=self.tqdm_interval_sec)
             
             done = False
+            average_perturbation = 0
             while not done:
                 # create obs dict
                 np_obs_dict = dict(obs)
@@ -831,20 +867,57 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                 # device transfer and enable gradients
                 # obs_dict = dict_apply(np_obs_dict,
                 #    lambda x: torch.from_numpy(x).to(device=device).requires_grad_(True))
+                if cfg.view == 'both':
+                    views = ['agentview_image', 'robot0_eye_in_hand_image']
+                elif isinstance(cfg.view, list):
+                    views = cfg.view
+                elif isinstance(cfg.view, str):
+                    views = [cfg.view]
 
                 # apply attack
                 if cfg.attack_type == 'fgsm':
+                    prev_obs_dict = obs_dict
                     obs_dict = self.apply_fgsm_attack(obs_dict, policy, cfg)
+                    # log the l2 norm of the perturbation for fgsm attack
+                    for view in views:
+                        perturbation = obs_dict[view] - prev_obs_dict[view]
+                        perturbation = perturbation.view(perturbation.shape[0], -1)
+                        perturbation_norm = torch.norm(perturbation, p=2, dim=1)
                 elif cfg.attack_type == 'fgsm_alt':
+                    prev_obs_dict = obs_dict
                     obs_dict = self.apply_fgsm_attack_loss_of_ibc(obs_dict, policy, cfg)
+                    # log the l2 norm of the perturbation for fgsm attack
+                    for view in views:
+                        perturbation = obs_dict[view] - prev_obs_dict[view]
+                        perturbation = perturbation.view(perturbation.shape[0], -1)
+                        perturbation_norm = torch.norm(perturbation, p=2, dim=1)
                 elif cfg.attack_type == 'pgd':
+                    prev_obs_dict = obs_dict
                     obs_dict = self.apply_pgd_attack(obs_dict, policy, cfg)
+                    # log the l2 norm of the perturbation for pgd attack
+                    for view in views:
+                        perturbation = obs_dict[view] - prev_obs_dict[view]
+                        perturbation = perturbation.view(perturbation.shape[0], -1)
+                        perturbation_norm = torch.norm(perturbation, p=2, dim=1)
                 elif cfg.attack_type == 'noise':
+                    prev_obs_dict = obs_dict
                     obs_dict = self.apply_noise_attack(obs_dict, policy, cfg)
+                    # log the l2 norm of the perturbation for noise attack
+                    for view in views:
+                        perturbation = obs_dict[view] - prev_obs_dict[view]
+                        perturbation = perturbation.view(perturbation.shape[0], -1)
+                        perturbation_norm = torch.norm(perturbation, p=2, dim=1)
+                        # take the mean of the perturbation norm
                 elif cfg.attack_type == None:
                     pass
                 else:
                     raise ValueError("Invalid attack type")
+
+                average_perturbation += perturbation_norm
+                if cfg.log == True:
+                    # log the perturbation for each environment separately
+                    for i in range(len(perturbation_norm)):
+                        wandb.log({f'perturbation_{view}_{i}': perturbation_norm[i]})
 
 
                 # run policy
@@ -872,7 +945,12 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                 # update pbar
                 pbar.update(action.shape[1])
             pbar.close()
-
+            if cfg.log == True:
+                # log the average perturbation for the whole step for 
+                # each environment
+                average_perturbation = average_perturbation / self.max_steps
+                for i in range(len(average_perturbation)):
+                    wandb.log({f'average_perturbation_{view}_{i}': average_perturbation[i]})
             # collect data for this round
             all_video_paths[this_global_slice] = env.render()[this_local_slice]
             all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]

@@ -314,6 +314,84 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             loss = F.cross_entropy(logits, labels)
         return loss
 
+    def compute_loss_with_grad(self, obs_dict_copy, actions):
+        """
+        Similar to the compute_loss function, but does not create 
+        a new observation dictionary for the forward pass. Instead,
+        the observation dictionary is passed directly to the forward
+        pass, for backpropagation the gradient of the observation.
+        """
+        # normalize input
+        # assert 'valid_mask' not in batch
+        views = ['agentview_image', 'robot0_eye_in_hand_image']
+        for view in views:
+                print("Obs dict copy is leaf?3", obs_dict_copy[view].is_leaf)
+        nobs = self.normalizer.normalize(obs_dict_copy)
+        for view in views:
+                print("Obs dict copy is leaf?4", obs_dict_copy[view].is_leaf)
+
+        naction = self.normalizer['action'].normalize(actions)
+        print("Obs_dict_copy grad1", obs_dict_copy['agentview_image'].grad_fn)
+
+        # shapes
+        Do = self.obs_feature_dim
+        Da = self.action_dim
+        To = self.n_obs_steps
+        Ta = self.n_action_steps
+        T = self.horizon
+        B = naction.shape[0]
+
+        # encode obs
+        # reshape B, T, ... to B*T
+        nobs = dict_apply(nobs,
+            lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+        nobs_features = self.obs_encoder(nobs)
+        # reshape back to B, To, Do
+        nobs_features = nobs_features.reshape(B,To,-1)
+        for view in views:
+            print("Obs dict copy is leaf? 5", obs_dict_copy[view].is_leaf)
+
+        print("Obs_dict_copy grad2", obs_dict_copy['agentview_image'].grad_fn)
+
+        start = To - 1
+        end = start + Ta
+        this_action = naction[:,start:end]
+
+        # Small additive noise to true positives.
+        this_action += torch.normal(mean=0, std=1e-4,
+            size=this_action.shape,
+            dtype=this_action.dtype,
+            device=this_action.device)
+        # Sample negatives: (B, train_n_neg, Ta, Da)
+        naction_stats = self.get_naction_stats()
+        action_dist = torch.distributions.Uniform(
+            low=naction_stats['min'],
+            high=naction_stats['max']
+        )
+        samples = action_dist.sample((B, self.train_n_neg, Ta)).to(
+            dtype=this_action.dtype)
+        action_samples = torch.cat([
+            this_action.unsqueeze(1), samples], dim=1)
+        # (B, train_n_neg+1, Ta, Da)
+
+        if self.andy_train:
+            # Get onehot labels
+            labels = torch.zeros(action_samples.shape[:2], 
+                dtype=this_action.dtype, device=this_action.device)
+            labels[:,0] = 1
+            logits = self.forward(nobs_features, action_samples)
+            # (B, N)
+            logits = torch.log_softmax(logits, dim=-1)
+            loss = -torch.mean(torch.sum(logits * labels, axis=-1))
+        else:
+            labels = torch.zeros((B,),dtype=torch.int64, device=this_action.device)
+            # training
+            logits = self.forward(nobs_features, action_samples)
+            loss = F.cross_entropy(logits, labels)
+        print("Obs_dict_copy grad3", obs_dict_copy['agentview_image'].grad_fn)
+        return loss, obs_dict_copy, nobs_features
+ 
+
     def get_naction_stats(self):
         Da = self.action_dim
         naction_stats = self.normalizer['action'].get_output_stats()

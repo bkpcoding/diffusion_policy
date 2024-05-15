@@ -7,13 +7,19 @@ n_envs: 1
 log: False
 device: 'cpu'
 attack: True
-attack_type: 'fgsm'
+attack_type: 'pgd'
 # epsilons: [0.01, 0.03, 0.1, 0.3, 0.5]
-# epsilons: [0.0078125, 0.01953125, 0.03125, 0.0625, 0.125]
-epsilons: [1]
+epsilons: [0.2]
 clip_min: 0
 clip_max: 1
 view: 'both'
+num_iter: 40
+rand_int: True
+eta_bound: [0.15, 0.1, 0.05]
+norm: 'linf'
+rand_target: True
+action_space: None
+
 
 # pgd:
 #  eta_bound:
