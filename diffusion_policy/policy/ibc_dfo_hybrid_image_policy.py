@@ -324,14 +324,8 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         # normalize input
         # assert 'valid_mask' not in batch
         views = ['agentview_image', 'robot0_eye_in_hand_image']
-        for view in views:
-                print("Obs dict copy is leaf?3", obs_dict_copy[view].is_leaf)
         nobs = self.normalizer.normalize(obs_dict_copy)
-        for view in views:
-                print("Obs dict copy is leaf?4", obs_dict_copy[view].is_leaf)
-
         naction = self.normalizer['action'].normalize(actions)
-        print("Obs_dict_copy grad1", obs_dict_copy['agentview_image'].grad_fn)
 
         # shapes
         Do = self.obs_feature_dim
@@ -348,11 +342,6 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         nobs_features = self.obs_encoder(nobs)
         # reshape back to B, To, Do
         nobs_features = nobs_features.reshape(B,To,-1)
-        for view in views:
-            print("Obs dict copy is leaf? 5", obs_dict_copy[view].is_leaf)
-
-        print("Obs_dict_copy grad2", obs_dict_copy['agentview_image'].grad_fn)
-
         start = To - 1
         end = start + Ta
         this_action = naction[:,start:end]
@@ -388,7 +377,6 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             # training
             logits = self.forward(nobs_features, action_samples)
             loss = F.cross_entropy(logits, labels)
-        print("Obs_dict_copy grad3", obs_dict_copy['agentview_image'].grad_fn)
         return loss, obs_dict_copy, nobs_features
  
 

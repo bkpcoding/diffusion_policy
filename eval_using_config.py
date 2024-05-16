@@ -12,8 +12,8 @@ import json
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.env_runner.robomimic_image_runner import AdversarialRobomimicImageRunner
 from omegaconf import OmegaConf
-# torch.backends.cudnn.enabled = False
-@hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_adversarial')
+torch.backends.cudnn.enabled = False
+@hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_adversarial')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_adversarial')
 def main(cfg):
     checkpoint = cfg.checkpoint
@@ -29,8 +29,9 @@ def main(cfg):
 
     if log:
         wandb.init(project='BC_Evaluation', name=f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-\
-        {checkpoint.split("/")[-3]}-{cfg.attack_type}_adversarial_on_{view}' if attack else\
+        {checkpoint.split("/")[-3]}-{cfg.attack_type}_adversarial_on_{view}_randtar_{cfg.rand_target}' if attack else
         f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-{checkpoint.split("/")[-3]}')
+        # wandb.init(project="BC_Evaluation", id='8uxiz5ii', resume='must')
     if cfg.attack_type == 'pgd':
         eta_bounds = cfg.eta_bound
         for eta_bound in eta_bounds:
@@ -46,6 +47,7 @@ def main(cfg):
                 payload = torch.load(open(checkpoint, 'rb'), pickle_module=dill)
                 cfg_loaded = payload['cfg']
                 cfg.action_space = cfg_loaded.shape_meta.action.shape
+
                 cls = hydra.utils.get_class(cfg_loaded._target_)
                 workspace = cls(cfg_loaded, output_dir=output_dir)
                 workspace: BaseWorkspace
@@ -114,7 +116,7 @@ def main(cfg):
                 cfg_loaded.task.env_runner['_target_'] = cfg._target_
                 cfg_loaded.task.env_runner['n_envs'] = n_envs
             cfg_loaded.task.env_runner['dataset_path'] = str(dataset_path)
-
+            cfg.action_space = cfg_loaded.shape_meta.action.shape
             try:
                 if cfg_loaded.training.use_ema:
                     policy = workspace.ema_model

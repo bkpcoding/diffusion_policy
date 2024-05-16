@@ -1,6 +1,7 @@
 _target_: 'diffusion_policy.env_runner.robomimic_image_runner.AdversarialRobomimicImageRunner'
 # checkpoint: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_0/checkpoints/epoch=1100-test_mean_score=1.000.ckpt'
-checkpoint: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_1/checkpoints/epoch=3050-test_mean_score=0.773.ckpt'
+#checkpoint: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_1/checkpoints/epoch=0300-test_mean_score=1.000.ckpt'
+checkpoint: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_2/checkpoints/epoch=0300-test_mean_score=1.000.ckpt'
 task: 'lift_ph'
 dataset_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/robomimic/datasets/lift/ph/image.hdf5'
 algo: 'lstm_gmm'
@@ -9,11 +10,13 @@ log: True
 device: 'cuda:0'
 attack: True
 attack_type: 'fgsm'
-epsilons: [0.01, 0.03, 0.1, 0.3, 0.5]
+# epsilons: [0.01, 0.03, 0.1, 0.3, 0.5]
+epsilons: [0.0078125, 0.01953125, 0.03125, 0.0625, 0.125]
 clip_min: 0
 clip_max: 1
 view: 'both'
-
+action_space: None
+rand_target: False
 # pgd:
 #  eta_bound:
 #  num_iter:
