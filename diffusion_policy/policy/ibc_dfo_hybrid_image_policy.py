@@ -11,6 +11,9 @@ import robomimic.utils.obs_utils as ObsUtils
 import robomimic.models.base_nets as rmbn
 import diffusion_policy.model.vision.crop_randomizer as dmvc
 from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
+import sys
+import numpy as np
+import pickle
 
 
 class IbcDfoHybridImagePolicy(BaseImagePolicy):
@@ -161,7 +164,7 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         return x
 
     # ========= inference  ============
-    def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def predict_action(self, obs_dict: Dict[str, torch.Tensor], return_energy=False) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
         result: must include "action" key
@@ -204,6 +207,9 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         # (B, N, Ta, Da)
         # print("Number of iterations", self.pred_n_iter)
         # print(nobs_features.shape)
+        # save the obs_dict['agentview_image'] to a npy file
+        # np.save('/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/obs_dict.npy', obs_dict['agentview_image'])
+        # samplesxlogits = {}
 
         if self.kevin_inference:
             # kevin's implementation
@@ -226,6 +232,8 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             probs = F.softmax(logits, dim=-1)
             best_idxs = probs.argmax(dim=-1)
             acts_n = samples[torch.arange(samples.size(0)), best_idxs, :]
+            if return_energy:
+                return {'samples': samples, 'energy': logits}
         else:
             # andy's implementation
             zero = torch.tensor(0, device=self.device)
@@ -234,21 +242,28 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
                 # Forward pass.
                 logits = self.forward(nobs_features, samples) # (B, N)
                 prob = torch.softmax(logits, dim=-1)
-
+                # samplesxlogits[i] = (samples, logits)
                 if i < (self.pred_n_iter - 1):
                     idxs = torch.multinomial(prob, self.pred_n_samples, replacement=True)
                     samples = samples[torch.arange(samples.size(0)).unsqueeze(-1), idxs]
                     samples += torch.normal(zero, resample_std, size=samples.shape, device=self.device)
-
+            if return_energy:
+                return {'samples': samples, 'energy': logits}
             # Return one sample per x in batch.
             idxs = torch.multinomial(prob, num_samples=1, replacement=True)
             acts_n = samples[torch.arange(samples.size(0)).unsqueeze(-1), idxs].squeeze(1)
-
+        
+        # save the samplesxlogits to a pickle file
+        # with open('/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/samplesxlogits.pkl', 'wb') as f:
+        #     pickle.dump(samplesxlogits, f)
+        # exit
+        # sys.exit(0)
         action = self.normalizer['action'].unnormalize(acts_n)
         result = {
             'action': action
         }
         return result
+
 
     # ========= training  ============
     def set_normalizer(self, normalizer: LinearNormalizer):

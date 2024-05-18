@@ -12,8 +12,13 @@ import json
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.env_runner.robomimic_image_runner import AdversarialRobomimicImageRunner
 from omegaconf import OmegaConf
-torch.backends.cudnn.enabled = False
-@hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_adversarial')
+from hydra.core.hydra_config import HydraConfig
+from hydra.utils import to_absolute_path, instantiate
+from hydra.core.global_hydra import GlobalHydra
+
+
+# torch.backends.cudnn.enabled = False
+@hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_pgd_adversarial')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_adversarial')
 def main(cfg):
     checkpoint = cfg.checkpoint
@@ -31,11 +36,18 @@ def main(cfg):
         wandb.init(project='BC_Evaluation', name=f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-\
         {checkpoint.split("/")[-3]}-{cfg.attack_type}_adversarial_on_{view}_randtar_{cfg.rand_target}' if attack else
         f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-{checkpoint.split("/")[-3]}')
-        # wandb.init(project="BC_Evaluation", id='8uxiz5ii', resume='must')
+        # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-rand_target-{cfg.rand_target}')
+        # wandb.init(project="BC_Evaluation", id='3cfkdwmo', resume='must')
+        config_path = 'diffusion_policy/eval_configs'
+        config_name = 'ibc_image_ph_pick_pgd_adversarial'
+        config_file_path = to_absolute_path(f"{config_path}/{config_name}.yaml")
+        # save the config file to wandb from the hydras config
+        wandb.save(config_file_path)
+
     if cfg.attack_type == 'pgd':
-        eta_bounds = cfg.eta_bound
-        for eta_bound in eta_bounds:
-            cfg.eta_bound = eta_bound
+        eps_iters = cfg.eps_iter
+        for eps_iter in eps_iters:
+            cfg.eps_iter = eps_iter
             for epsilon in epsilons:
                 # the output directory should depend on the current directory and the checkpoint path and the attack type and epsilon
                 output_dir = os.path.join(os.getcwd(), f"diffusion_policy/data/experiments/image/{task}/{algo}/eval_{checkpoint.split('/')[-3]}_{epsilon}_{view}")
@@ -52,13 +64,17 @@ def main(cfg):
                 workspace = cls(cfg_loaded, output_dir=output_dir)
                 workspace: BaseWorkspace
                 workspace.load_payload(payload, exclude_keys=None, include_keys=None)
-
                 policy = workspace.model
 
                 if attack:
                     print("Running adversarial Attack")
                     cfg_loaded.task.env_runner['_target_'] = cfg._target_
                     cfg_loaded.task.env_runner['n_envs'] = n_envs
+                if cfg.n_test > 0:
+                    cfg_loaded.task.env_runner['n_test'] = cfg.n_test
+                if cfg.n_train > 0:
+                    cfg_loaded.task.env_runner['n_train'] = cfg.n_train
+
                 cfg_loaded.task.env_runner['dataset_path'] = str(dataset_path)
 
                 try:
@@ -88,11 +104,10 @@ def main(cfg):
                         json_log[key] = value
                 if log:
                     wandb.log({"test/mean_score": json_log["test/mean_score"], "train/mean_score": json_log["train/mean_score"], \
-                        "Epsilon":float(epsilon), "eta_bound": float(eta_bound)})
+                        "Epsilon":float(epsilon), "eps_iter": float(eps_iter)})
                 out_path = os.path.join(output_dir, 'eval_log.json')
                 json.dump(json_log, open(out_path, 'w'), indent=2, sort_keys=True)
             wandb.finish()
-
     else:
         for epsilon in epsilons:
             # the output directory should depend on the current directory and the checkpoint path and the attack type and epsilon
@@ -115,6 +130,10 @@ def main(cfg):
                 print("Running adversarial Attack")
                 cfg_loaded.task.env_runner['_target_'] = cfg._target_
                 cfg_loaded.task.env_runner['n_envs'] = n_envs
+            if cfg.n_test > 0:
+                cfg_loaded.task.env_runner['n_test'] = cfg.n_test
+            if cfg.n_train > 0:
+                cfg_loaded.task.env_runner['n_train'] = cfg.n_train
             cfg_loaded.task.env_runner['dataset_path'] = str(dataset_path)
             cfg.action_space = cfg_loaded.shape_meta.action.shape
             try:
