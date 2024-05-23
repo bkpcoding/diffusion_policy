@@ -46,6 +46,12 @@ lift_fgsm_lstm_gmm = {'train_0': 'sagar8/BC_Evaluation/05mpt9g6', 'train_1': 'sa
                         'train_2': 'sagar8/BC_Evaluation/xvwrhjpn'}
 lift_fgsm_bc = {'train_0': ''}
 
+lift_pgd_ibc_rand_target = {'train_0': 'sagar8/BC_Evaluation/kmm0j5mt', 'train_1': 'sagar8/BC_Evaluation/6bvqb23o', \
+                            'train_2': 'sagar8/BC_Evaluation/sd5foxb0'}
+lift_pgd_ibc = {'train_0': 'sagar8/BC_Evaluation/v0rok3b3', 'train_1': 'sagar8/BC_Evaluation/tqchjhp8', \
+                'train_2': 'sagar8/BC_Evaluation/lg9kieud'}
+
 if __name__ == '__main__':
     # plot_eps_vs_attack(lift_fgsm_ibc, 'LIFT-FGSM-IBC', 'lift_fgsm_ibc.png')
-    plot_eps_vs_attack(lift_fgsm_lstm_gmm, 'LIFT-FGSM-LSTM-GMM', 'lift_fgsm_lstm_gmm.png')
+    # plot_eps_vs_attack(lift_fgsm_lstm_gmm, 'LIFT-FGSM-LSTM-GMM', 'lift_fgsm_lstm_gmm.png')
+    plot_eps_vs_attack(lift_pgd_ibc, 'LIFT-PGD-IBC', 'lift_pgd_ibc.png')

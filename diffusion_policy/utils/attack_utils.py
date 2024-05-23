@@ -58,3 +58,39 @@ def optimize_linear(grad, eps, norm='linf'):
     # norm=1 problem
     scaled_perturbation = eps * optimal_perturbation
     return scaled_perturbation
+
+
+
+def clip_perturb(eta, norm, eps):
+    """
+    Clip the perturbation, so that the resulting perturbation is at most
+    eps in the given norm.
+
+    :param eta: Tensor
+    :param norm: np.inf, 1, or 2
+    :param eps: float
+    """
+    if norm not in ['linf', 'l1', 'l2']:
+        raise ValueError("norm must be np.inf, 1, or 2.")
+
+    avoid_zero_div = torch.tensor(1e-12, dtype=eta.dtype, device=eta.device)
+    reduc_ind = list(range(1, len(eta.size())))
+    if norm == 'linf':
+        eta = torch.clamp(eta, -eps, eps)
+    else:
+        if norm == 'l1':
+            raise NotImplementedError("L1 clip is not implemented.")
+            norm = torch.max(
+                avoid_zero_div, torch.sum(torch.abs(eta), dim=reduc_ind, keepdim=True)
+            )
+        elif norm == 'l2':
+            norm = torch.sqrt(
+                torch.max(
+                    avoid_zero_div, torch.sum(eta ** 2, dim=reduc_ind, keepdim=True)
+                )
+            )
+        factor = torch.min(
+            torch.tensor(1.0, dtype=eta.dtype, device=eta.device), eps / norm
+        )
+        eta *= factor
+    return eta

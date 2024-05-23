@@ -179,6 +179,7 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         Da = self.action_dim
         Do = self.obs_feature_dim
         To = self.n_obs_steps
+        self.pred_n_iter = 1
 
         # build input
         device = self.device
@@ -232,8 +233,6 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             probs = F.softmax(logits, dim=-1)
             best_idxs = probs.argmax(dim=-1)
             acts_n = samples[torch.arange(samples.size(0)), best_idxs, :]
-            if return_energy:
-                return {'samples': samples, 'energy': logits}
         else:
             # andy's implementation
             zero = torch.tensor(0, device=self.device)
@@ -247,8 +246,6 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
                     idxs = torch.multinomial(prob, self.pred_n_samples, replacement=True)
                     samples = samples[torch.arange(samples.size(0)).unsqueeze(-1), idxs]
                     samples += torch.normal(zero, resample_std, size=samples.shape, device=self.device)
-            if return_energy:
-                return {'samples': samples, 'energy': logits}
             # Return one sample per x in batch.
             idxs = torch.multinomial(prob, num_samples=1, replacement=True)
             acts_n = samples[torch.arange(samples.size(0)).unsqueeze(-1), idxs].squeeze(1)
@@ -262,6 +259,9 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         result = {
             'action': action
         }
+        if return_energy:
+            result['energy'] = logits
+            result['samples'] = samples
         return result
 
 
@@ -311,7 +311,7 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             dtype=this_action.dtype)
         action_samples = torch.cat([
             this_action.unsqueeze(1), samples], dim=1)
-        # (B, train_n_neg+1, Ta, Da)
+         # (B, train_n_neg+1, Ta, Da)
 
         if self.andy_train:
             # Get onehot labels
@@ -329,7 +329,7 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             loss = F.cross_entropy(logits, labels)
         return loss
 
-    def compute_loss_with_grad(self, obs_dict_copy, actions):
+    def compute_loss_with_grad(self, obs_dict_copy, actions, action_samples = None):
         """
         Similar to the compute_loss function, but does not create 
         a new observation dictionary for the forward pass. Instead,
@@ -374,8 +374,10 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         )
         samples = action_dist.sample((B, self.train_n_neg, Ta)).to(
             dtype=this_action.dtype)
-        action_samples = torch.cat([
-            this_action.unsqueeze(1), samples], dim=1)
+        if action_samples is None:
+            action_samples = torch.cat([
+                this_action.unsqueeze(1), samples], dim=1)
+        # print("Action samples in compute_loss: ", action_samples[0, 10, :])
         # (B, train_n_neg+1, Ta, Da)
 
         if self.andy_train:
@@ -392,6 +394,12 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             # training
             logits = self.forward(nobs_features, action_samples)
             loss = F.cross_entropy(logits, labels)
+        # print the actions given and the most probable action
+        # print("Actions given: ", actions)
+        # most_probable_action = torch.argmax(logits, dim=1)
+        # most_probable_action = action_samples[torch.arange(action_samples.size(0)), most_probable_action, :]
+        # print("Most probable action: ", most_probable_action)
+        # print('Energy of the correct action: ', logits[0, 0])
         return loss, obs_dict_copy, nobs_features
  
 

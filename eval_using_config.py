@@ -21,7 +21,7 @@ from hydra.core.global_hydra import GlobalHydra
 @hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_pgd_adversarial')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_adversarial')
 def main(cfg):
-    checkpoint = cfg.checkpoint
+    checkpoint = cfg.checkpoints[0]
     task = cfg.task
     algo = cfg.algo
     n_envs = cfg.n_envs
@@ -36,7 +36,7 @@ def main(cfg):
         wandb.init(project='BC_Evaluation', name=f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-\
         {checkpoint.split("/")[-3]}-{cfg.attack_type}_adversarial_on_{view}_randtar_{cfg.rand_target}' if attack else
         f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-{checkpoint.split("/")[-3]}')
-        # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-rand_target-{cfg.rand_target}')
+        # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-rand_target-{cfg.rand_target}-rand_init-{cfg.rand_int}')
         # wandb.init(project="BC_Evaluation", id='3cfkdwmo', resume='must')
         config_path = 'diffusion_policy/eval_configs'
         config_name = 'ibc_image_ph_pick_pgd_adversarial'
@@ -105,6 +105,7 @@ def main(cfg):
                 if log:
                     wandb.log({"test/mean_score": json_log["test/mean_score"], "train/mean_score": json_log["train/mean_score"], \
                         "Epsilon":float(epsilon), "eps_iter": float(eps_iter)})
+                print("Test/mean_score: ", json_log["test/mean_score"])
                 out_path = os.path.join(output_dir, 'eval_log.json')
                 json.dump(json_log, open(out_path, 'w'), indent=2, sort_keys=True)
             wandb.finish()

@@ -14,6 +14,7 @@ from diffusion_policy.gym_util.sync_vector_env import SyncVectorEnv
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.video_recording_wrapper import VideoRecordingWrapper, VideoRecorder
 from diffusion_policy.model.common.rotation_transformer import RotationTransformer
+from diffusion_policy.utils.attack_utils import optimize_linear, clip_perturb
 
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.common.pytorch_util import dict_apply
@@ -22,7 +23,7 @@ from diffusion_policy.env.robomimic.robomimic_image_wrapper import RobomimicImag
 import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.obs_utils as ObsUtils
-
+import pickle
 
 def create_env(env_meta, shape_meta, enable_render=True):
     modality_mapping = collections.defaultdict(list)
@@ -436,7 +437,7 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
         num_iter = cfg.num_iter
         clip_min = cfg.clip_min
         clip_max = cfg.clip_max
-        eta_bound = cfg.eta_bound
+        eps_iter = cfg.eps_iter
         norm = cfg.norm
         rand_int = cfg.rand_int
         # check if the input tensors are within the clip range
@@ -455,7 +456,7 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
             # randomly initialize the perturbation from a uniform distribution within the epsilon bound
             for view in views:
                 perturbation = torch.FloatTensor(obs_dict[view].shape).uniform_(-self.epsilon, self.epsilon).to(obs_dict[view].device)
-                perturbation = torch.clamp(perturbation, -eta_bound, eta_bound)
+                perturbation = torch.clamp(perturbation, -eps_iter, eps_iter)
                 perturbation = torch.clamp(obs_dict[view] + perturbation, clip_min, clip_max) - obs_dict[view]
                 adv_obs_dict[view] = obs_dict[view] + perturbation
 
@@ -651,8 +652,14 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
 class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.lipschitz_consts = []
+        self.episodes_lipschitz_consts = []
+        self.loss_per_iteration = []
+        self.loss_per_episode = []
+        self.perturbation_per_episode = []
 
-    def apply_fgsm_attack_loss_of_ibc(self, obs_dict, policy:BaseImagePolicy, cfg, actions = None):
+    def apply_fgsm_attack_loss_of_ibc(self, obs_dict_cp, policy:BaseImagePolicy, cfg, actions = None, \
+                                        action_samples=None):
         # use the same loss as the policy
         view = cfg.view
         if view == 'both':
@@ -665,7 +672,7 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
             raise ValueError("view must be a string or a list of strings")
 
         # create a copy of the original obs_dict that requires grad for backward pass
-        obs_dict_copy = dict_apply(obs_dict, lambda x: x.clone().detach().requires_grad_(True))
+        obs_dict_copy = dict_apply(obs_dict_cp, lambda x: x.clone().detach().requires_grad_(True))
          # retain the grad on the non-leaf tensor, i.e. the input tensor
         # for view in views:
         #     obs_dict_copy[view].retain_grad()
@@ -676,54 +683,76 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
         # batch = {}
         # batch['obs'] = obs_dict_copy
         # batch['action'] = actions
-
-        loss, obs_dict_copy, obs_features = policy.compute_loss_with_grad(obs_dict_copy, actions)
+        if action_samples is not None:
+            loss, obs_dict_copy, obs_features = policy.compute_loss_with_grad(obs_dict_copy, actions, action_samples)
+        else:
+            loss, obs_dict_copy, obs_features = policy.compute_loss_with_grad(obs_dict_copy, actions)
+        # print(loss.item())
+        self.loss_per_iteration.append(loss.item())
         # for view in views:
         #     print("Obs dict copy is leaf? ", obs_dict_copy[view].is_leaf)
         # print("Loss: ", loss)
+        if cfg.rand_target:
+             loss = -loss
         if cfg.log:
             wandb.log({"FGSM_Loss": loss})
         loss.backward()
         # print("Observation features and its grad ", obs_features, obs_features.grad)
-        prev_obs_dict = obs_dict
+        prev_obs_dict = obs_dict_cp
         for view in views:
             # check if the grad is not None
             assert obs_dict_copy[view].grad is not None, "Input tensor does not have a grad"
             # calculate the average value of the grad and store in wandb
             grad = torch.sign(obs_dict_copy[view].grad)
+            if obs_dict_copy[view].grad is not None:
+                obs_dict_copy[view].grad.zero_()  # Clear gradients for obs_dict to save memory
             # log the lipschitz constant for the input tensor
             lip_grad = obs_dict_copy[view].grad.view(obs_dict_copy[view].shape[0], -1)
             # calculate seperate lipschitz constant for each env in the batch
             lip_const = torch.norm(lip_grad, p=2, dim=1)
-            if cfg.log:
-                for i in range(len(lip_grad)):
-                    wandb.log({f'Lipschitz_{view}_{i}': lip_const[i]})
+            for i in range(len(lip_grad)):
+                if cfg.log:
+                     wandb.log({f'Lipschitz_{view}_{i}': lip_const[i]})
+            # self.lipschitz_consts.append((view, lip_const))
             # print("Grad: ", grad)
-            if obs_dict_copy[view].grad is not None:
-                obs_dict_copy[view].grad.zero_()  # Clear gradients for obs_dict to save memory
-            # print("Grad: ", grad)
-            if cfg.attack_type != 'pgd':
-                if cfg.rand_target:
-                    obs_dict_copy[view] = obs_dict_copy[view] - self.epsilon * grad
-                else:
-                    obs_dict_copy[view] = obs_dict_copy[view] + self.epsilon * grad
-            elif cfg.attack_type == 'pgd':
-                if cfg.rand_target:
-                    obs_dict_copy[view] = obs_dict_copy[view] - cfg.eps_iter * grad
-                else:
-                    obs_dict_copy[view] = obs_dict_copy[view] + cfg.eps_iter * grad
+            # if cfg.attack_type != 'pgd':
+            #     if cfg.rand_target:
+            #         obs_dict_copy[view] = obs_dict_copy[view] - self.epsilon * grad
+            #     else:
+            #         obs_dict_copy[view] = obs_dict_copy[view] + self.epsilon * grad
+            # elif cfg.attack_type == 'pgd':
+            #     if cfg.rand_target:
+            #         obs_dict_copy[view] = obs_dict_copy[view] - cfg.eps_iter * grad
+            #     else:
+            #         obs_dict_copy[view] = obs_dict_copy[view] + cfg.eps_iter * grad
+            # else:
+            #     raise ValueError("Only PGD and FGSM attacks are supported")
+
+            if cfg.attack_type == 'pgd':
+                obs_dict_copy[view] = obs_dict_copy[view] + optimize_linear(grad, cfg.eps_iter, cfg.norm)
+            elif cfg.attack_type == 'fgsm' :
+                obs_dict_copy[view] = obs_dict_copy[view] + optimize_linear(grad, self.epsilon, cfg.norm)
             else:
                 raise ValueError("Only PGD and FGSM attacks are supported")
-            obs_dict_copy[view] = torch.clamp(obs_dict_copy[view], cfg.clip_min, cfg.clip_max)
-            diff = abs(obs_dict_copy[view] - prev_obs_dict[view])
-            diff = diff.view(diff.shape[0], -1)
-            grad = grad.view(grad.shape[0], -1)
+            old_obs_dict = obs_dict_copy[view]
+            # print("Grad: ", grad)
+            if (cfg.clip_min is not None) or (cfg.clip_max is not None):
+                if cfg.clip_min is None or cfg.clip_max is None:
+                    raise ValueError(
+                        "One of clip_min and clip_max is None but we don't currently support one-sided clipping"
+                    )
+                obs_dict_copy[view] = torch.clamp(obs_dict_copy[view], cfg.clip_min, cfg.clip_max)
+                # if torch.any(old_obs_dict != obs_dict_copy[view]):
+                    # print("Clipping applied")
+            # diff = abs(obs_dict_copy[view] - prev_obs_dict[view])
+            # diff = diff.view(diff.shape[0], -1)
+            # grad = grad.view(grad.shape[0], -1)
             # log the maximum perturbation across the batch
-            diff_max = torch.max(diff, dim=1)
-            grad_max = torch.max(grad, dim=1)
-            diff_sum = torch.sum(diff, dim=1)
-            if cfg.log:
-                wandb.log({"Sum_Perturbation": diff_sum})
+            # diff_max = torch.max(diff, dim=1)
+            # grad_max = torch.max(grad, dim=1)
+            # diff_sum = torch.sum(diff, dim=1)
+            # if cfg.log:
+            #    wandb.log({"Sum_Perturbation": diff_sum})
         return obs_dict_copy
 
 
@@ -780,6 +809,9 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
         """
         Apply projected gradient descent attack from Madry et al. (2017)
         """
+        # self.lipschitz_consts = []
+        self.loss_per_iteration = []
+        self.pertubation_per_iteration = []
         view = cfg.view
         num_iter = cfg.num_iter
         clip_min = cfg.clip_min
@@ -787,6 +819,14 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
         norm = cfg.norm
         rand_int = cfg.rand_int
         adv_obs_dict = obs_dict
+        B = obs_dict['agentview_image'].shape[0]
+        T_neg = policy.train_n_neg
+        T_a = policy.n_action_steps
+        naction_stats = policy.get_naction_stats()
+        action_samples = torch.distributions.Uniform(
+            low=naction_stats['min'],
+            high=naction_stats['max']
+        ).sample((B, T_neg, T_a)).to(device=obs_dict['agentview_image'].device)
         # check if the input tensors are within the clip range
         if view == 'both':
             # make a list of views in the rgb space
@@ -813,11 +853,12 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
             target_actions = policy.predict_action(obs_dict)['action']
         # add a dummy action at the beginning to get the shape right while
         # computing loss but it won't be used in the loss computation
+        action_samples = torch.cat([target_actions.unsqueeze(1), action_samples], dim=1)
         target_actions = torch.cat([torch.zeros_like(target_actions[:,0:1]), target_actions], dim=1)
-
+        # print("First obs dict: ", adv_obs_dict['agentview_image'])
         for i in range(num_iter):
             policy.zero_grad()
-            adv_obs_dict = self.apply_fgsm_attack_loss_of_ibc(adv_obs_dict, policy, cfg, target_actions)
+            adv_obs_dict = self.apply_fgsm_attack_loss_of_ibc(adv_obs_dict, policy, cfg, target_actions, action_samples)
             for view in views:
                 perturbation = adv_obs_dict[view] - obs_dict[view]
                 if norm == 'l2':
@@ -826,6 +867,10 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                     perturbation = torch.clamp(perturbation, -self.epsilon, self.epsilon)
                 adv_obs_dict[view] = obs_dict[view] + perturbation
                 adv_obs_dict[view] = torch.clamp(adv_obs_dict[view], clip_min, clip_max)
+                # if view == 'agentview_image':
+                    # perturbation_wrt_original = torch.sum(abs(adv_obs_dict[view].view(adv_obs_dict[view].shape[0], -1).float() - obs_dict[view].view(obs_dict[view].shape[0], -1).float()), dim=1)
+                    # print("Perturbation wrt original: ", perturbation_wrt_original)
+                    # self.pertubation_per_iteration.append(perturbation_wrt_original)
             # print mean perturbation
             # print("Mean perturbation: ", torch.mean(perturbation))
         return adv_obs_dict
@@ -903,6 +948,9 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
             
             done = False
             average_perturbation = 0
+            # perturbed_obs_dicts = []
+            # clean_obs_dicts = []
+
             while not done:
                 # create obs dict
                 np_obs_dict = dict(obs)
@@ -915,6 +963,9 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                 obs_dict = dict_apply(np_obs_dict, 
                     lambda x: torch.from_numpy(x).to(
                         device=device))
+                print(type(obs_dict), obs_dict['agentview_image'].shape)
+
+                # clean_obs_dicts.append(obs_dict)
                 if cfg.rand_target:
                     target_actions = torch.FloatTensor(obs_dict['agentview_image'].shape[0], \
                                 self.n_action_steps, cfg.action_space[0]).uniform_(0, 1).to(obs_dict['agentview_image'].device)
@@ -923,6 +974,7 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                 # add a dummy action at the beginning to get the shape right while
                 # computing loss but it won't be used in the loss computation
                 target_actions = torch.cat([torch.zeros_like(target_actions[:,0:1]), target_actions], dim=1)
+                # print("Target actions: ", target_actions)
 
                 # device transfer and enable gradients
                 # obs_dict = dict_apply(np_obs_dict,
@@ -950,6 +1002,9 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                 elif cfg.attack_type == 'pgd':
                     prev_obs_dict = obs_dict
                     obs_dict = self.apply_pgd_attack(obs_dict, policy, cfg)
+                    # self.episodes_lipschitz_consts.append(self.lipschitz_consts)
+                    self.loss_per_episode.append(self.loss_per_iteration)
+                    # self.perturbation_per_episode.append(self.pertubation_per_iteration)
                     # log the l2 norm of the perturbation for pgd attack
                     for view in views:
                         perturbation = abs(obs_dict[view] - prev_obs_dict[view])
@@ -1004,6 +1059,7 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                 # run policy
                 with torch.no_grad():
                     action_dict = policy.predict_action(obs_dict)
+                # perturbed_obs_dicts.append(obs_dict)
 
                 # device_transfer
                 np_action_dict = dict_apply(action_dict,
@@ -1037,7 +1093,14 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
             all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
         # clear out video buffer
         _ = env.reset()
-        
+        # save the obs_dicts as a pickle file
+        # pickle.dump(clean_obs_dicts, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/clean_obs_dicts_{self.epsilon}_randtar_{cfg.rand_target}_{cfg.norm}.pkl", "wb"))
+        # pickle.dump(perturbed_obs_dicts, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/perturbed_obs_dicts_{self.epsilon}_randtar_{cfg.rand_target}_{cfg.norm}.pkl", "wb"))
+
+        # save the episode  lipschitz constants
+        # pickle.dump(self.episodes_lipschitz_consts, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/lipschitz_consts_{self.epsilon}_randtar_{cfg.rand_target}_{cfg.norm}.pkl", "wb"))
+        pickle.dump(self.loss_per_episode, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/pkl_files/loss_per_episode_{self.epsilon}_randtar_{cfg.rand_target}_{cfg.norm}_lr_{cfg.eps_iter}_same_action_samples.pkl", "wb"))
+        # pickle.dump(self.perturbation_per_episode, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/perturbation_per_episode_{self.epsilon}_randtar_{cfg.rand_target}_{cfg.norm}_lr_{cfg.eps_iter}.pkl", "wb"))
         # log
         max_rewards = collections.defaultdict(list)
         log_data = dict()

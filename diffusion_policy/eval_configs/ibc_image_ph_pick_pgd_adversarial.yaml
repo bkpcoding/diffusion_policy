@@ -1,27 +1,31 @@
 _target_: 'diffusion_policy.env_runner.robomimic_image_runner.AdversarialRobomimicImageRunnerIBC'
-checkpoint: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_1/checkpoints/epoch=3050-test_mean_score=0.773.ckpt'
+# checkpoints: ['/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_0/checkpoints/epoch=1900-test_mean_score=0.955.ckpt',
+# '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_1/checkpoints/epoch=3050-test_mean_score=0.773.ckpt',
+# '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_2/checkpoints/epoch=2100-test_mean_score=1.000.ckpt'
+# ]
+checkpoints: ['/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_1/checkpoints/epoch=3050-test_mean_score=0.773.ckpt']
 task: 'lift_ph'
 dataset_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/robomimic/datasets/lift/ph/image.hdf5'
 algo: 'ibc'
-n_envs: 28
-log: True
-device: 'cuda:0'
+n_envs: 2
+log: False
+device: 'cpu'
 attack: True
 attack_type: 'pgd'
 # epsilons: [0.01, 0.03, 0.1, 0.3, 0.5]
-epsilons: [0.0625, 0.125, 0.2, 0.3]
-# epsilons: [0.3]
+# epsilons: [0.0625, 0.125, 0.2, 0.3]
+epsilons: [0.125]
 clip_min: 0
 clip_max: 1
 view: 'both'
 num_iter: 40
-rand_int: False
-eps_iter: [0.01]
+rand_int: True
+eps_iter: [0.005]
 norm: 'linf'
-rand_target: True
+rand_target: False
 action_space: None
-n_train: 6
-n_test: 50
+n_train: 1
+n_test: 1
 
 
 # pgd:
