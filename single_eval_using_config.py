@@ -18,7 +18,7 @@ from hydra.core.global_hydra import GlobalHydra
 
 
 # torch.backends.cudnn.enabled = False
-@hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_single_pgd')
+@hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_single_patch')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_adversarial')
 def main(cfg):
     checkpoint = cfg.checkpoints[0]
@@ -68,7 +68,7 @@ def main(cfg):
     # else:
     #     runner_log = env_runner.run(policy)
     env_runner.probability_of_action(policy, cfg)
-    # env_runner.create_videos(policy, cfg, perturbation = -1)
+    # env_runner.create_videos(policy, cfg, perturbation = -0.10)
 
     # json_log = dict()
     # for key, value in runner_log.items():

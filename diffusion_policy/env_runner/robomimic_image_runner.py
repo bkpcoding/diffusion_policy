@@ -692,10 +692,11 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
         # for view in views:
         #     print("Obs dict copy is leaf? ", obs_dict_copy[view].is_leaf)
         # print("Loss: ", loss)
-        if cfg.rand_target:
+        if cfg.rand_target or cfg.target_perturbations:
              loss = -loss
         if cfg.log:
-            wandb.log({"FGSM_Loss": loss})
+            wandb.log({"FGSM_Loss": loss.item()})
+        # print(loss.item())
         loss.backward()
         # print("Observation features and its grad ", obs_features, obs_features.grad)
         prev_obs_dict = obs_dict_cp
@@ -710,9 +711,9 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
             lip_grad = obs_dict_copy[view].grad.view(obs_dict_copy[view].shape[0], -1)
             # calculate seperate lipschitz constant for each env in the batch
             lip_const = torch.norm(lip_grad, p=2, dim=1)
-            for i in range(len(lip_grad)):
-                if cfg.log:
-                     wandb.log({f'Lipschitz_{view}_{i}': lip_const[i]})
+            # for i in range(len(lip_grad)):
+            #     if cfg.log:
+            #         wandb.log({f'Lipschitz_{view}_{i}': lip_const[i]})
             # self.lipschitz_consts.append((view, lip_const))
             # print("Grad: ", grad)
             # if cfg.attack_type != 'pgd':
@@ -851,9 +852,16 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                         self.n_action_steps, cfg.action_space[0]).uniform_(0, 1).to(obs_dict['agentview_image'].device)
         else:
             target_actions = policy.predict_action(obs_dict)['action']
+            clean_actions = target_actions
+            if cfg.target_perturbations:
+                # print("Target Action before Perturbation: ", target_actions)
+                target_actions = target_actions + torch.tensor(cfg.perturbations).to(obs_dict['agentview_image'].device)
+                # print("Target Action after Perturbation: ", target_actions)
         # add a dummy action at the beginning to get the shape right while
         # computing loss but it won't be used in the loss computation
         action_samples = torch.cat([target_actions.unsqueeze(1), action_samples], dim=1)
+        # replace one of the action with the clean action
+        action_samples[:, 1] = clean_actions
         target_actions = torch.cat([torch.zeros_like(target_actions[:,0:1]), target_actions], dim=1)
         # print("First obs dict: ", adv_obs_dict['agentview_image'])
         for i in range(num_iter):
@@ -948,7 +956,7 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
             
             done = False
             average_perturbation = 0
-            # perturbed_obs_dicts = []
+            perturbed_obs_dicts = []
             # clean_obs_dicts = []
 
             while not done:
@@ -1003,7 +1011,7 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                     prev_obs_dict = obs_dict
                     obs_dict = self.apply_pgd_attack(obs_dict, policy, cfg)
                     # self.episodes_lipschitz_consts.append(self.lipschitz_consts)
-                    self.loss_per_episode.append(self.loss_per_iteration)
+                    # self.loss_per_episode.append(self.loss_per_iteration)
                     # self.perturbation_per_episode.append(self.pertubation_per_iteration)
                     # log the l2 norm of the perturbation for pgd attack
                     for view in views:
@@ -1095,11 +1103,11 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
         _ = env.reset()
         # save the obs_dicts as a pickle file
         # pickle.dump(clean_obs_dicts, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/clean_obs_dicts_{self.epsilon}_randtar_{cfg.rand_target}_{cfg.norm}.pkl", "wb"))
-        # pickle.dump(perturbed_obs_dicts, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/perturbed_obs_dicts_{self.epsilon}_randtar_{cfg.rand_target}_{cfg.norm}.pkl", "wb"))
+        # pickle.dump(perturbed_obs_dicts, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/pkl_files/target_perturbations/perturbed_obs_dicts_{self.epsilon}_tar_{cfg.target_perturbations}_perturb_{cfg.perturbations[0]}_{cfg.norm}.pkl", "wb"))
 
         # save the episode  lipschitz constants
         # pickle.dump(self.episodes_lipschitz_consts, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/lipschitz_consts_{self.epsilon}_randtar_{cfg.rand_target}_{cfg.norm}.pkl", "wb"))
-        pickle.dump(self.loss_per_episode, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/pkl_files/loss_per_episode_{self.epsilon}_randtar_{cfg.rand_target}_{cfg.norm}_lr_{cfg.eps_iter}_same_action_samples.pkl", "wb"))
+        # pickle.dump(self.loss_per_episode, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/pkl_files/loss_per_episode_{self.epsilon}_tar_{cfg.target_perturbations}_{cfg.norm}_perturb_{cfg.perturbations[0]}_same_action_samples.pkl", "wb"))
         # pickle.dump(self.perturbation_per_episode, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/perturbation_per_episode_{self.epsilon}_randtar_{cfg.rand_target}_{cfg.norm}_lr_{cfg.eps_iter}.pkl", "wb"))
         # log
         max_rewards = collections.defaultdict(list)

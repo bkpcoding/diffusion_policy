@@ -127,6 +127,7 @@ class RobomimicSingleImageRunner(BaseImageRunner):
         timestep = 0
         observations = []
         while not done:
+            print(f'timestep: {timestep}')
             np_obs_dict = dict(obs)
             obs_dict = dict_apply(np_obs_dict, lambda x: torch.from_numpy(x).to(policy.device))
             obs_dict = dict_apply(obs_dict, lambda x: x.unsqueeze(0))
@@ -137,7 +138,7 @@ class RobomimicSingleImageRunner(BaseImageRunner):
                 lambda x: x.detach().to('cpu').numpy())
             action = np_action_dict['action'].squeeze(0)
             if perturbation is not None:
-                action_perturbation = np.array([0, perturbation, 0, 0, 0, 0, 0]).reshape(action.shape)
+                action_perturbation = np.array([-1*perturbation, perturbation, 0, 0, 0, 0, 0]).reshape(action.shape)
                 action = action + action_perturbation
             obs, reward, done, info = self.env.step(action)
             timestep += 1
@@ -154,7 +155,7 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             im = ax.imshow(observations[i][0, :, :, :].transpose(1, 2, 0))
             ims.append([im])
         ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
-        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/perturbed_pick.gif', writer='imagemagick', fps=4)
+        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/perturbed_pick_0.1_two_perturb.gif', writer='imagemagick', fps=4)
         
 
 
@@ -220,7 +221,7 @@ class RobomimicSingleImageRunner(BaseImageRunner):
 
 
     def apply_fgsm_attack_loss_of_ibc(self, obs_dict_cp, policy:BaseImagePolicy, cfg, actions = None, \
-                                        action_samples=None):
+                                        action_samples=None, patch=None, mask=None):
         view = cfg.view
         if view == 'both':
             views = ['agentview_image', 'robot0_eye_in_hand_image']                
@@ -230,8 +231,14 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             views = [view]
         else:
             raise ValueError("view must be a string or a list of strings")
-        # create a copy of the original obs_dict that requires grad for backward pass
-        obs_dict_copy = dict_apply(obs_dict_cp, lambda x: x.clone().detach().requires_grad_(True))
+        obs_dict_copy = obs_dict_cp
+        if patch_location == 'top_left':
+                obs_dict_copy['robot0_eye_in_hand_image'] = mask * patch + (1 - mask) * obs_dict_cp['robot0_eye_in_hand_image']
+            else:
+                raise ValueError("Patch location not supported")
+
+        # create a copy of the original obs_dict that requires grad for backward pass                    
+        # obs_dict_copy = dict_apply(obs_dict_cp, lambda x: x.clone().detach().requires_grad_(True))
         policy.zero_grad()
 
         assert actions is not None, "Actions must be provided for IBC loss"
@@ -243,11 +250,26 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             loss = -loss
         self.loss_per_iteration.append(loss.item())
         loss.backward()
+        print("Loss: ", loss.item())
         # print("Observation features and its grad ", obs_features, obs_features.grad)
         prev_obs_dict = obs_dict_cp
         for view in views:
             # check if the grad is not None
             assert obs_dict_copy[view].grad is not None, "Input tensor does not have a grad"
+            if cfg.attack_type == 'patch':
+                if view == 'robot0_eye_in_hand_image':
+                    grad = torch.sign(patch.grad)
+                    # print("Grad before mask: ", grad)
+                    grad = cfg.eps_iter * mask * grad
+                    # print("GRad after mask: ", grad)    
+                    patch = patch + grad
+                    obs_dict_copy[view] = (1 - mask) * obs_dict_copy[view] + mask * patch
+                    obs_dict_copy[view] = torch.clamp(obs_dict_copy[view], cfg.clip_min, cfg.clip_max)
+                    continue
+                else:
+                    continue
+            # assert statement to check that this part isn't reached when using patch attack
+            assert not cfg.attack_type == 'patch', "Patch attack not supported for this part of the code"
             # calculate the average value of the grad and store in wandb
             grad = torch.sign(obs_dict_copy[view].grad)
             if obs_dict_copy[view].grad is not None:
@@ -280,7 +302,7 @@ class RobomimicSingleImageRunner(BaseImageRunner):
         else:
             raise ValueError("view must be a string or a list of strings")
 
-        adv_obs_dict = dict_apply(obs_dict, lambda x: x.requires_grad_())
+        adv_obs_dict = obs_dict
         eps_iter = cfg.eps_iter
         num_iter = cfg.num_iter
         for i in range(num_iter):
@@ -292,6 +314,57 @@ class RobomimicSingleImageRunner(BaseImageRunner):
                     adv_obs_dict[view] = torch.clamp(adv_obs_dict[view], cfg.clip_min, cfg.clip_max)
         return adv_obs_dict
         
+    def get_patch(self, patch_size, patch_type, image_size):
+        '''
+        Get the patch based on the patch type
+        '''
+        if patch_type == 'square':
+            patch = torch.zeros((3, image_size, image_size))
+            mask = torch.zeros((3, image_size, image_size))
+            mask[:, :patch_size, :patch_size] = 1
+        else:
+            raise ValueError("Patch type not supported")
+        return patch, mask
+
+
+    def apply_patch_attack(self, policy, obs_dict, cfg, epsilon, clean_action, action_samples):
+        '''
+        Apply the patch attack on the observation
+        '''
+        view = cfg.view
+        if view == 'both':
+            views = ['agentview_image', 'robot0_eye_in_hand_image']                
+        elif isinstance(view, list):
+            views = view
+        elif isinstance(view, str):
+            views = [view]
+        else:
+            raise ValueError("view must be a string or a list of strings")
+        self.loss_per_iteration = []
+        # get the image size
+        image_size = obs_dict['robot0_eye_in_hand_image'].shape[-1]
+        # get the patch size
+        patch_size = cfg.patch_size
+        # get the patch location
+        patch_location = cfg.patch_loc
+        # get the patch type
+        patch_type = cfg.patch_type
+        patch, mask = self.get_patch(patch_size, patch_type, image_size)
+        # make the patch requires grad
+        patch = patch.requires_grad_()
+        adv_obs_dict = obs_dict
+        
+        for i in range(cfg.num_iter):
+            adv_obs_dict = self.apply_fgsm_attack_loss_of_ibc(adv_obs_dict, policy, cfg, clean_action, action_samples, patch, mask)
+            # for view in views:
+            #         perturbation = adv_obs_dict[view] - obs_dict[view]
+            #         perturbation = torch.clamp(perturbation, -epsilon, epsilon)
+            #         adv_obs_dict[view] = obs_dict[view] + perturbation
+            #         adv_obs_dict[view] = torch.clamp(adv_obs_dict[view], cfg.clip_min, cfg.clip_max)
+        return adv_obs_dict
+        
+
+
     def probability_of_action(self, policy:BaseImagePolicy, cfg = None):
         '''
         We plot the probability of taking the same action under different perturbations
@@ -302,7 +375,6 @@ class RobomimicSingleImageRunner(BaseImageRunner):
         obs = self.env.reset()
         done = False
 
-        epsilons = cfg.epsilons
         views = ['agentview_image', 'robot0_eye_in_hand_image']
         timestep = 0
         observations = []
@@ -311,16 +383,10 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             obs_dict = dict_apply(np_obs_dict, lambda x: torch.from_numpy(x).to(policy.device))
             obs_dict = dict_apply(obs_dict, lambda x: x.unsqueeze(0))
             observations.append(obs_dict['agentview_image'].squeeze(0).detach().cpu().numpy())
+            probs = {}
+            distance = {}
+            epsilon = cfg.epsilon
             policy.reset()
-            with torch.no_grad():
-                clean_action = policy.predict_action(obs_dict)['action']
-                if cfg.targeted:
-                    # make the action all zeros except the second coordinate to -1
-                    # making the robot move in a horizontal direction
-                    print(f'Action before: {clean_action}')
-                    clean_action = clean_action + torch.tensor([0, -1, 0, 0, 0, 0, 0]).to(clean_action.device)
-                    print(f'Action after: {clean_action}')
-            clean_action_np = clean_action.detach().cpu().numpy()
             B = obs_dict['agentview_image'].shape[0]
             T_neg = policy.train_n_neg
             T_a = policy.n_action_steps
@@ -329,75 +395,92 @@ class RobomimicSingleImageRunner(BaseImageRunner):
                 low=naction_stats['min'],
                 high=naction_stats['max']
             ).sample((B, T_neg, T_a)).to(device=obs_dict['agentview_image'].device)
-            action_samples = torch.cat([clean_action.unsqueeze(1), action_samples], dim=1)
-            probs = {}
-            distance = {}
-            loss_per_epsilon = {}
-
-            for epsilon in epsilons:
-                adv_obs = self.apply_pgd_attck(policy, obs_dict, cfg, epsilon, clean_action, action_samples)
-                loss_per_epsilon[epsilon] = self.loss_per_iteration
+            loss_per_perturbation = {}
+            for perturbation in cfg.perturbations:
+                with torch.no_grad():
+                    clean_action = policy.predict_action(obs_dict)['action']
+                    clean_action_before = clean_action.clone()
+                    if cfg.targeted:
+                        # make the action all zeros except the second coordinate to -1
+                        # making the robot move in a horizontal direction
+                        clean_action = clean_action + torch.tensor([0, perturbation, 0, 0, 0, 0, 0]).to(clean_action.device)
+                clean_action_np = clean_action.detach().cpu().numpy()
+                action_samples = torch.cat([clean_action.unsqueeze(1), action_samples], dim=1)
+                action_samples[:, 1] = clean_action_before
+                if cfg.attack_type == 'pgd':
+                    adv_obs = self.apply_pgd_attck(policy, obs_dict, cfg, epsilon, clean_action, action_samples)
+                elif cfg.attack_type == 'patch':
+                    adv_obs = self.apply_patch_attack(policy, obs_dict, cfg, epsilon, clean_action, action_samples)
+                    # save the perturbed image
+                    perturbed_image = adv_obs['robot0_eye_in_hand_image'].squeeze(0).detach().cpu().numpy()[0]
+                    print(max(perturbed_image.flatten()), min(perturbed_image.flatten()))
+                    plt.imsave(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/images/adversarial_patch/patch_attack_{perturbation}.png', perturbed_image.transpose(1, 2, 0))
+                # loss_per_perturbation[perturbation] = self.loss_per_iteration
                 # print(f'Loss for epsilon {epsilon}: {self.loss_per_iteration}')
                 # get the probability of taking the same action by running the
                 # policy on the adversarial observation 100 times
-                n_samples = 100
-                action_list = []
-                for i in range(n_samples):
-                    action = policy.predict_action(adv_obs)['action']
-                    action_list.append(action.detach().cpu().numpy())
-                action_list = np.array(action_list)
-                # get the probability of taking similar action within the bound of 0.1 of the clean action
-                # in linf norm
-                diff = np.abs(action_list.reshape(action_list.shape[0], -1) - clean_action_np.reshape(1, -1))
-                diff = np.sum(diff, axis=1)
-                distance[epsilon] = np.mean(diff)
-                # print the linf norm of the difference
-                diff = np.sum(diff < 0.5, axis=0) / n_samples
-                # print(f'Probability of taking the same action for epsilon {epsilon}: {diff}')
-                probs[epsilon] = diff
-            predicted_output = policy.predict_action(obs_dict, return_energy=True)
-            predicted_energy = predicted_output['energy']
-            predicted_samples = predicted_output['samples']
-            predicted_action = predicted_output['action']
-            # print the sample and energy which has maximum energy
-            predicted_index = predicted_energy.argmax()
-            print(f"Timestep: {timestep}")
-            print(f'Predicted energy: {predicted_energy[0, predicted_index]}')
-            print(f'Predicted sample: {predicted_samples[0, predicted_index]}')
-            predicted_action_np = predicted_action.detach().cpu().numpy()
+                # n_samples = 100
+                # action_list = []
+                # for i in range(n_samples):
+                #     action = policy.predict_action(adv_obs)['action']
+                #     action_list.append(action.detach().cpu().numpy())
+                # action_list = np.array(action_list)
+                # # get the probability of taking similar action within the bound of 0.1 of the clean action
+                # # in linf norm
+                # diff = np.abs(action_list.reshape(action_list.shape[0], -1) - clean_action_np.reshape(1, -1))
+                # diff = np.sum(diff, axis=1)
+                # distance[perturbation] = np.mean(diff)
+                # # print the linf norm of the difference
+                # diff = np.sum(diff == 0, axis=0) / n_samples
+                # # print(f'Probability of taking the same action for epsilon {epsilon}: {diff}')
+                # probs[perturbation] = diff
+            # predicted_output = policy.predict_action(obs_dict, return_energy=True)
+            # predicted_energy = predicted_output['energy']
+            # predicted_samples = predicted_output['samples']
+            # predicted_action = predicted_output['action']
+            # # print the sample and energy which has maximum energy
+            # predicted_index = predicted_energy.argmax()
+            # print(f"Timestep: {timestep}")
+            # print(f'Predicted energy: {predicted_energy[0, predicted_index]}')
+            # print(f'Predicted sample: {predicted_samples[0, predicted_index]}')
+            # predicted_action_np = predicted_action.detach().cpu().numpy()
             adversarial_output = policy.predict_action(adv_obs, return_energy=True)
-            adversarial_energy = adversarial_output['energy']
-            adversarial_samples = adversarial_output['samples']
-            # print the sample and energy which has maximum energy
-            adversarial_index = adversarial_energy.argmax()
-            print(f"Timestep: {timestep}")
-            print(f'Adversarial energy: {adversarial_energy[0, adversarial_index]}')
-            print(f'Adversarial sample: {adversarial_samples[0, adversarial_index]}')
+            # adversarial_energy = adversarial_output['energy']
+            # adversarial_samples = adversarial_output['samples']
+            # # print the sample and energy which has maximum energy
+            # adversarial_index = adversarial_energy.argmax()
+            # print(f"Timestep: {timestep}")
+            # print(f'Adversarial energy: {adversarial_energy[0, adversarial_index]}')
+            # print(f'Adversarial sample: {adversarial_samples[0, adversarial_index]}')
+            # adversarial_action_index = 0
+            # print(f"Adversarial action index: {adversarial_action_index}")
+            # print(f'Adversarial action energy: {adversarial_energy[0, adversarial_action_index]}')
+            # print(f'Adversarial action sample: {adversarial_samples[0, adversarial_action_index]}')
             adversarial_action = adversarial_output['action']
             adversarial_action_np = adversarial_action.detach().cpu().numpy()
             # obs, reward, done, info = self.env.step(predicted_action_np.squeeze(0))
             obs, reward, done, info = self.env.step(adversarial_action_np.squeeze(0))
             timestep += 1
             # plot the probability of taking the same action vs epsilon
-            fig = plt.figure()
-            plt.plot(probs.keys(), probs.values())
-            # draw on the second y axis the distance
-            plt.twinx()
-            plt.plot(distance.keys(), distance.values(), 'r')
-            plt.xlabel('Epsilon')
-            plt.ylabel('Probability of taking the same action*')
-            plt.savefig(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/images/targeted_eps_prob_pred_iter1/probability_of_same_action_linf_0.5_{timestep}.png')
-            plt.close(fig)
+            # fig = plt.figure()
+            # plt.plot(probs.keys(), probs.values())
+            # # draw on the second y axis the distance
+            # plt.twinx()
+            # plt.plot(distance.keys(), distance.values(), 'r')
+            # plt.xlabel('Perturbation')
+            # plt.ylabel('Probability of taking the same action')
+            # plt.savefig(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/images/targeted_perturbations/probability_of_same_action_linf_0.0_act_inject_{timestep}.png')
+            # plt.close(fig)
 
-            fig = plt.figure()
-            # plot the loss per epsilon
-            for epsilon, loss in loss_per_epsilon.items():
-                plt.plot(loss, label=f'epsilon: {epsilon}')
-            plt.legend()
-            plt.xlabel('Iteration')
-            plt.ylabel('Loss')
-            plt.savefig(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/images/targeted_eps_prob_pred_iter1/loss_per_epsilon_{timestep}.png')
-            plt.close(fig)
+            # fig = plt.figure()
+            # # plot the loss per epsilon
+            # for perturbation, loss in loss_per_perturbation.items():
+            #     plt.plot(loss, label=f'perturbation: {perturbation}')
+            # plt.legend()
+            # plt.xlabel('Iteration')
+            # plt.ylabel('Loss')
+            # plt.savefig(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/images/targeted_perturbations/loss_per_epsilon_act_inject_{timestep}.png')
+            # plt.close(fig)
             if timestep % 80 == 0:
                 break
         self.env.close()
@@ -410,5 +493,5 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             im = ax.imshow(observations[i][0, :, :, :].transpose(1, 2, 0))
             ims.append([im])
         ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
-        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/targeted_adv_policy.gif', writer='imagemagick', fps=4)
+        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/target_perturbations_/n_pred_5/perturb_{cfg.perturbations[0]}_epsilon_{cfg.epsilon}_strength_{cfg.num_iter}.gif', writer='imagemagick', fps=4)
 

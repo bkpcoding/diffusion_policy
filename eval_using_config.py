@@ -36,7 +36,8 @@ def main(cfg):
         wandb.init(project='BC_Evaluation', name=f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-\
         {checkpoint.split("/")[-3]}-{cfg.attack_type}_adversarial_on_{view}_randtar_{cfg.rand_target}' if attack else
         f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-{checkpoint.split("/")[-3]}')
-        # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-rand_target-{cfg.rand_target}-rand_init-{cfg.rand_int}')
+        wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-rand_target-{cfg.rand_target}-rand_init-{cfg.rand_int}')
+        # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-target_perturbations-{cfg.target_perturbations}-pertubation-{cfg.perturbations[1]}')
         # wandb.init(project="BC_Evaluation", id='3cfkdwmo', resume='must')
         config_path = 'diffusion_policy/eval_configs'
         config_name = 'ibc_image_ph_pick_pgd_adversarial'

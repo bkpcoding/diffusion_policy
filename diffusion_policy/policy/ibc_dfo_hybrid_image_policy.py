@@ -164,7 +164,7 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         return x
 
     # ========= inference  ============
-    def predict_action(self, obs_dict: Dict[str, torch.Tensor], return_energy=False) -> Dict[str, torch.Tensor]:
+    def predict_action(self, obs_dict: Dict[str, torch.Tensor], return_energy=False, adversarial_action=None) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
         result: must include "action" key
@@ -179,7 +179,7 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         Da = self.action_dim
         Do = self.obs_feature_dim
         To = self.n_obs_steps
-        self.pred_n_iter = 1
+        self.pred_n_iter = 5
 
         # build input
         device = self.device
@@ -205,6 +205,9 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         )
         samples = action_dist.sample((B, self.pred_n_samples, Ta)).to(
             dtype=dtype)
+        if adversarial_action is not None:
+            # sneak in the adversarial action in the samples
+            samples[:, 0, :] = adversarial_action
         # (B, N, Ta, Da)
         # print("Number of iterations", self.pred_n_iter)
         # print(nobs_features.shape)

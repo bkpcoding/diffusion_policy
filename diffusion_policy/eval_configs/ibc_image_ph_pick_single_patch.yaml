@@ -5,24 +5,29 @@ dataset_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/r
 algo: 'ibc'
 device: 'cpu'
 attack: True
-attack_type: 'pgd'
+attack_type: 'patch'
 seed: 1023
 # epsilons: [0.01, 0.03, 0.1, 0.3, 0.5]
 # epsilons: [0.015625, 0.03125, 0.0625, 0.125, 0.2, 0.3, 0.5, 1.0]
 epsilon: 0.2
-perturbations: [0.15]
+perturbations: [0.25]
 clip_min: 0
 clip_max: 1
-view: 'both'
-num_iter: 200
+view: 'robot0_eye_in_hand_image'
+num_iter: 40
 targeted: True
 rand_int: True
-eps_iter: 0.01
+eps_iter: 0.02
 norm: 'linf'
 rand_target: False
 action_space: None
 n_train: 1
 n_test: 1
+
+patch_size: 16
+patch_type: 'square'
+patch_loc: 'top_left'
+image_size: 84
 
 
 # pgd:
