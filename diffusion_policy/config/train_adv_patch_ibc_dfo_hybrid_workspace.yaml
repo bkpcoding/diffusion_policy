@@ -16,6 +16,13 @@ n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
 past_action_visible: False
 keypoint_visible_rate: 1.0
+view: 'robot0_eye_in_hand_image'
+eps_iter: 0.01
+eps: 0.125
+perturbations: [0, 0.15, 0.15, 0, 0, 0, 0]
+n_iter: 40
+clip_min: 0
+clip_max: 1
 
 policy:
   _target_: diffusion_policy.policy.ibc_dfo_hybrid_image_policy.IbcDfoHybridImagePolicy
@@ -36,7 +43,7 @@ policy:
   crop_shape: [84, 84]
 
 dataloader:
-  batch_size: 128
+  batch_size: 64
   num_workers: 8
   shuffle: True
   pin_memory: True
@@ -57,8 +64,8 @@ optimizer:
   weight_decay: 1.0e-6
 
 training:
-  device: "cuda:0"
-  seed: 42
+  device: "cpu"
+  seed: 1023
   debug: False
   resume: True
   # optimization
@@ -88,14 +95,7 @@ logging:
   id: null
   group: null
 
-checkpoint:
-  topk:
-    monitor_key: test_mean_score
-    mode: max
-    k: 5
-    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
-  save_last_ckpt: True
-  save_last_snapshot: False
+checkpoint: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_1/checkpoints/epoch=3050-test_mean_score=0.773.ckpt'
 
 multi_run:
   run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}

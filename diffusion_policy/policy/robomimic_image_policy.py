@@ -1,5 +1,6 @@
 from typing import Dict
 import torch
+import torch.nn as nn
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.common.pytorch_util import dict_apply
@@ -136,6 +137,44 @@ class RobomimicImagePolicy(BaseImagePolicy):
 
     def get_optimizer(self):
         return self.model.optimizers['policy']
+
+    def train_adv_patch(self, batch, adv_patch, cfg):
+        """
+        Train the adversarial patch on the batch of data
+        Based on paper: https://arxiv.org/pdf/1610.08401
+        For each image in the batch, try to perturb the image according to 
+        the perturbation specified in the config
+        """
+        # turn the adversarial patch into a parameter
+        adv_patch = adv_patch.unsqueeze(0).to(self.model.device)
+
+        obs_dict = batch['obs']
+        perturbed_view = obs_dict[cfg.view] + adv_patch
+        # clamp the perturbed_obs to be within the range of the original image
+        perturbed_view = torch.clamp(perturbed_view, 0, 1)
+        obs_dict[cfg.view] = perturbed_view
+        perturbed_obs_dict = dict_apply(obs_dict, lambda x: x.clone().detach().requires_grad_(True))
+
+        # nactions = self.normalizer['action'].normalize(batch['action'])
+        actions = batch['action']
+        self.model.reset()
+        # get the predicted action for the perturbed observation
+        with torch.no_grad():
+            action_dist = self.action_dist(perturbed_obs_dict)
+            action_means = action_dist.component_distribution.base_dist.loc
+        predicted_action_dist = self.action_dist(perturbed_obs_dict)
+        predicted_means = predicted_action_dist.component_distribution.base_dist.loc
+        # calculate the loss
+        loss = nn.MSELoss()(predicted_means, action_means)
+        # since we are doing a targeted attack, we want to minimize the loss
+        loss.backward()
+        # perturb the observation with the gradient according to FGSM
+        grad = torch.sign(perturbed_obs_dict[cfg.view].grad)
+        grad = torch.sum(grad, dim=0)
+        adv_patch = adv_patch + cfg.eps_iter * grad
+        # clip the adversarial patch to be within cfg.eps
+        adv_patch = torch.clamp(adv_patch, -cfg.eps, cfg.eps).squeeze(0)
+        return adv_patch, loss.item()
 
 
 def test():

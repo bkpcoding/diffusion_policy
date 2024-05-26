@@ -3,18 +3,18 @@ checkpoints: ['/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/e
 task: 'lift_ph'
 dataset_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/robomimic/datasets/lift/ph/image.hdf5'
 algo: 'ibc'
-device: 'cpu'
+device: 'cuda:0'
 attack: True
 attack_type: 'pgd'
 seed: 1023
 # epsilons: [0.01, 0.03, 0.1, 0.3, 0.5]
 # epsilons: [0.015625, 0.03125, 0.0625, 0.125, 0.2, 0.3, 0.5, 1.0]
-epsilon: 0.2
+epsilon: 0.015625
 perturbations: [0.15]
 clip_min: 0
 clip_max: 1
 view: 'both'
-num_iter: 200
+num_iter: 40
 targeted: True
 rand_int: True
 eps_iter: 0.01

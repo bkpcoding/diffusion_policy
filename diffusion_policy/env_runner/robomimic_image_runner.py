@@ -236,7 +236,7 @@ class RobomimicImageRunner(BaseImageRunner):
         self.abs_action = abs_action
         self.tqdm_interval_sec = tqdm_interval_sec
 
-    def run(self, policy: BaseImagePolicy):
+    def run(self, policy: BaseImagePolicy, adversarial_patch=None, cfg=None):
         device = policy.device
         dtype = policy.dtype
         env = self.env
@@ -289,6 +289,11 @@ class RobomimicImageRunner(BaseImageRunner):
                 obs_dict = dict_apply(np_obs_dict, 
                     lambda x: torch.from_numpy(x).to(
                         device=device))
+                
+                if adversarial_patch is not None:
+                    obs_dict[cfg.view] = obs_dict[cfg.view] + adversarial_patch.unsqueeze(0).to(device)
+                    obs_dict[cfg.view] = torch.clamp(obs_dict[cfg.view], cfg.clip_min, cfg.clip_max)
+
 
                 # run policy
                 with torch.no_grad():
@@ -1009,16 +1014,17 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                         
                 elif cfg.attack_type == 'pgd':
                     prev_obs_dict = obs_dict
-                    obs_dict = self.apply_pgd_attack(obs_dict, policy, cfg)
+                    for _ in range(cfg.num_epochs):
+                        obs_dict = self.apply_pgd_attack(obs_dict, policy, cfg)
                     # self.episodes_lipschitz_consts.append(self.lipschitz_consts)
                     # self.loss_per_episode.append(self.loss_per_iteration)
                     # self.perturbation_per_episode.append(self.pertubation_per_iteration)
                     # log the l2 norm of the perturbation for pgd attack
-                    for view in views:
-                        perturbation = abs(obs_dict[view] - prev_obs_dict[view])
-                        perturbation = perturbation.view(perturbation.shape[0], -1)
-                        perturbation_max = torch.max(perturbation, dim=1)
-                        perturbation_sum = torch.sum(perturbation, dim=1)
+                    # for view in views:
+                    #     perturbation = abs(obs_dict[view] - prev_obs_dict[view])
+                    #     perturbation = perturbation.view(perturbation.shape[0], -1)
+                    #     perturbation_max = torch.max(perturbation, dim=1)
+                    #     perturbation_sum = torch.sum(perturbation, dim=1)
                 elif cfg.attack_type == 'noise':
                     prev_obs_dict = obs_dict
                     obs_dict = self.apply_noise_attack(obs_dict, policy, cfg)

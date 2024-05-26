@@ -18,7 +18,7 @@ from hydra.core.global_hydra import GlobalHydra
 
 
 # torch.backends.cudnn.enabled = False
-@hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_single_patch')
+@hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_single_pgd')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_adversarial')
 def main(cfg):
     checkpoint = cfg.checkpoints[0]

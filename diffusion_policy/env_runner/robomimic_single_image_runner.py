@@ -231,9 +231,10 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             views = [view]
         else:
             raise ValueError("view must be a string or a list of strings")
-        obs_dict_copy = obs_dict_cp
-        if patch_location == 'top_left':
-                obs_dict_copy['robot0_eye_in_hand_image'] = mask * patch + (1 - mask) * obs_dict_cp['robot0_eye_in_hand_image']
+        obs_dict_copy = dict_apply(obs_dict_cp, lambda x: x.clone().detach().requires_grad_(True))
+        if cfg.attack_type == 'patch':
+            if cfg.patch_location == 'top_left':
+                    obs_dict_copy['robot0_eye_in_hand_image'] = mask * patch + (1 - mask) * obs_dict_cp['robot0_eye_in_hand_image']
             else:
                 raise ValueError("Patch location not supported")
 
@@ -250,7 +251,7 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             loss = -loss
         self.loss_per_iteration.append(loss.item())
         loss.backward()
-        print("Loss: ", loss.item())
+        # print("Loss: ", loss.item())
         # print("Observation features and its grad ", obs_features, obs_features.grad)
         prev_obs_dict = obs_dict_cp
         for view in views:
@@ -379,6 +380,7 @@ class RobomimicSingleImageRunner(BaseImageRunner):
         timestep = 0
         observations = []
         while not done:
+            print(f'timestep: {timestep}')
             np_obs_dict = dict(obs)
             obs_dict = dict_apply(np_obs_dict, lambda x: torch.from_numpy(x).to(policy.device))
             obs_dict = dict_apply(obs_dict, lambda x: x.unsqueeze(0))
@@ -409,6 +411,14 @@ class RobomimicSingleImageRunner(BaseImageRunner):
                 action_samples[:, 1] = clean_action_before
                 if cfg.attack_type == 'pgd':
                     adv_obs = self.apply_pgd_attck(policy, obs_dict, cfg, epsilon, clean_action, action_samples)
+                    for i in range(3):
+                        new_action_samples = torch.distributions.Uniform(
+                            low=naction_stats['min'],
+                            high=naction_stats['max']
+                        ).sample((B, T_neg, T_a)).to(device=obs_dict['agentview_image'].device)
+                        new_action_samples = torch.cat([clean_action.unsqueeze(1), new_action_samples], dim=1)
+                        new_action_samples[:, 1] = clean_action_before
+                        adv_obs = self.apply_pgd_attck(policy, adv_obs, cfg, epsilon, clean_action, new_action_samples)
                 elif cfg.attack_type == 'patch':
                     adv_obs = self.apply_patch_attack(policy, obs_dict, cfg, epsilon, clean_action, action_samples)
                     # save the perturbed image
@@ -493,5 +503,5 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             im = ax.imshow(observations[i][0, :, :, :].transpose(1, 2, 0))
             ims.append([im])
         ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
-        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/target_perturbations_/n_pred_5/perturb_{cfg.perturbations[0]}_epsilon_{cfg.epsilon}_strength_{cfg.num_iter}.gif', writer='imagemagick', fps=4)
+        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/target_perturbations_/multiple_samples/perturb_{cfg.perturbations[0]}_epsilon_{cfg.epsilon}_strength_{cfg.num_iter}.gif', writer='imagemagick', fps=4)
 

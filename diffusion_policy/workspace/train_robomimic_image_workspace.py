@@ -22,7 +22,6 @@ import shutil
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.robomimic_image_policy import RobomimicImagePolicy
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
-from diffusion_policy.dataset.robomimic_replay_image_dataset import RobomimicReplayImageDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
 from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
@@ -45,6 +44,7 @@ class TrainRobomimicImageWorkspace(BaseWorkspace):
 
         # configure model
         self.model: RobomimicImagePolicy = hydra.utils.instantiate(cfg.policy)
+
         # configure training state
         self.global_step = 0
         self.epoch = 0
@@ -61,23 +61,7 @@ class TrainRobomimicImageWorkspace(BaseWorkspace):
 
         # configure dataset
         dataset: BaseImageDataset
-        # dataset = hydra.utils.instantiate(cfg.task.dataset)
-        print(cfg.task.dataset)
-        dataset = RobomimicReplayImageDataset(shape_meta = cfg.task.dataset.shape_meta,
-            dataset_path = cfg.task.dataset.dataset_path,
-            horizon = cfg.task.dataset.horizon,
-            pad_before = cfg.task.dataset.pad_before,
-            pad_after=cfg.task.dataset.pad_after,
-            n_obs_steps=cfg.task.dataset.n_obs_steps,
-            abs_action=cfg.task.dataset.abs_action,
-            # rotation_rep='rotation_6d', # ignored when abs_action=False
-            rotation_rep=cfg.task.dataset.rotation_rep,
-            use_legacy_normalizer=cfg.task.dataset.use_legacy_normalizer,
-            use_cache=cfg.task.dataset.use_cache,
-            seed=cfg.task.dataset.seed,
-            val_ratio=cfg.task.dataset.val_ratio,
-            )
-        dataset = hydra.utils.call(cfg.task.dataset)
+        dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
         normalizer = dataset.get_normalizer()
@@ -176,13 +160,13 @@ class TrainRobomimicImageWorkspace(BaseWorkspace):
                 self.model.eval()
 
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch != 0 and self.epoch != 1:
+                if (self.epoch % cfg.training.rollout_every) == 0:
                     runner_log = env_runner.run(self.model)
                     # log all
                     step_log.update(runner_log)
 
                 # run validation
-                if (self.epoch % cfg.training.val_every) == 0 and self.epoch != 0 and self.epoch != 1:
+                if (self.epoch % cfg.training.val_every) == 0:
                     with torch.no_grad():
                         val_losses = list()
                         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
@@ -201,7 +185,7 @@ class TrainRobomimicImageWorkspace(BaseWorkspace):
                             step_log['val_loss'] = val_loss
 
                 # run diffusion sampling on a training batch
-                if (self.epoch % cfg.training.sample_every) == 0 and self.epoch != 0 and self.epoch != 1:
+                if (self.epoch % cfg.training.sample_every) == 0:
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
                         batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
@@ -227,7 +211,7 @@ class TrainRobomimicImageWorkspace(BaseWorkspace):
                         del mse
 
                 # checkpoint
-                if (self.epoch % cfg.training.checkpoint_every) == 0 and self.epoch != 0 and self.epoch != 1:
+                if (self.epoch % cfg.training.checkpoint_every) == 0:
                     # checkpointing
                     if cfg.checkpoint.save_last_ckpt:
                         self.save_checkpoint()

@@ -341,7 +341,6 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         """
         # normalize input
         # assert 'valid_mask' not in batch
-        views = ['agentview_image', 'robot0_eye_in_hand_image']
         nobs = self.normalizer.normalize(obs_dict_copy)
         naction = self.normalizer['action'].normalize(actions)
 
@@ -402,7 +401,9 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         # most_probable_action = torch.argmax(logits, dim=1)
         # most_probable_action = action_samples[torch.arange(action_samples.size(0)), most_probable_action, :]
         # print("Most probable action: ", most_probable_action)
-        # print('Energy of the correct action: ', logits[0, 0])
+        # print('Energy of the first action: ', logits[0, 0])
+        # print('Energy of the second action: ', logits[0, 1])
+        # print('Energy of the most probable action: ', torch.max(logits[0, 1:]))
         return loss, obs_dict_copy, nobs_features
  
 
@@ -417,6 +418,62 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             repeated_stats[key] = value.repeat(n_repeats)
         return repeated_stats
 
+
+    def train_adv_patch(self, batch, adv_patch, cfg):
+        """
+        Train an adversarial patch for the batch of images.
+        """
+        B = batch['obs'][cfg.view].shape[0]
+        T_neg = self.train_n_neg
+        T_a = self.n_action_steps
+        adv_patch = adv_patch.unsqueeze(0).to(self.device)
+        obs_dict = batch['obs']
+        obs_dict = dict_apply(obs_dict, lambda x: x.to(self.device))
+        # check if the obs_dict[cfg.view] is in the correct range
+        assert torch.min(obs_dict[cfg.view].flatten()) >= 0
+        assert torch.max(obs_dict[cfg.view].flatten()) <= 1
+        perturbed_view = obs_dict[cfg.view] + adv_patch
+        perturbed_view = perturbed_view.clamp(0, 1)
+        perturbed_obs_dict = obs_dict.copy()
+
+        perturbed_obs_dict[cfg.view] = perturbed_view
+        perturbed_obs_dict = dict_apply(perturbed_obs_dict, lambda x: x.clone().detach().requires_grad_(True))
+
+        predicted_action = self.predict_action(obs_dict)['action']
+        
+        actions = batch['action']
+        actions = actions[:, -self.n_action_steps:, :]
+        # target_actions = actions + torch.tensor(cfg.perturbations).unsqueeze(0).to(self.device)
+        target_actions = predicted_action + torch.tensor(cfg.perturbations).unsqueeze(0).to(self.device)
+        # clean_actions = target_actions
+        clean_actions = predicted_action
+        clean_actions = self.normalizer['action'].normalize(clean_actions)
+        naction_stats = self.get_naction_stats()
+        action_samples = torch.distributions.Uniform(
+            low=naction_stats['min'],
+            high=naction_stats['max']
+        ).sample((B, T_neg, T_a)).to(device=self.device)
+        print(min(action_samples.flatten()), max(action_samples.flatten()))
+        action_samples = torch.cat([target_actions.unsqueeze(1), action_samples], dim=1)
+        action_samples[:, 1, ...] = clean_actions
+        print(min(action_samples.flatten()), max(action_samples.flatten()))
+        prev_obs_dict = obs_dict.copy()
+        for j in range(cfg.n_iter):
+            loss, perturbed_obs_dict, nobs_features = self.compute_loss_with_grad(perturbed_obs_dict, target_actions, action_samples)
+            loss = -loss
+            loss.backward()
+            print(f'Loss at iteration {j}: {loss.item()}')
+            assert perturbed_obs_dict[cfg.view].grad is not None
+            grad = torch.sign(perturbed_obs_dict[cfg.view].grad)
+            grad = torch.sum(grad, dim=0)
+            adv_patch = adv_patch + cfg.eps_iter * grad
+            adv_patch = torch.clamp(adv_patch, -cfg.eps, cfg.eps)
+            perturbed_obs_dict[cfg.view] = torch.clamp(obs_dict[cfg.view] + adv_patch, cfg.clip_min, cfg.clip_max)
+            # perturbed_obs_dict[cfg.view] = torch.clamp(perturbed_obs_dict[cfg.view] + cfg.eps_iter * grad, 0, 1)
+            perturbed_obs_dict = dict_apply(perturbed_obs_dict, lambda x: x.clone().detach().requires_grad_(True))
+
+        adv_patch = torch.clamp(adv_patch, -cfg.eps, cfg.eps).squeeze(0)
+        return adv_patch, loss.item()
 
     def action_dist(self, obs_dict: Dict[str, torch.Tensor]):
         """
