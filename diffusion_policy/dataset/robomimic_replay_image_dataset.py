@@ -185,7 +185,10 @@ class RobomimicReplayImageDataset(BaseImageDataset):
         return normalizer
 
     def get_all_actions(self) -> torch.Tensor:
-        return torch.from_numpy(self.replay_buffer['action'])
+        try:
+            return torch.from_numpy(self.replay_buffer['action'])
+        except TypeError:
+            return torch.from_numpy(self.replay_buffer['action'][:])
 
     def __len__(self):
         return len(self.sampler)

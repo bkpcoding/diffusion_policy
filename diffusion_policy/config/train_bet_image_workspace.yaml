@@ -1,0 +1,146 @@
+defaults:
+  - _self_
+  - task: lift_image
+
+name: train_bet_image
+_target_: diffusion_policy.workspace.train_bet_image_workspace.TrainBETImageWorkspace
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+horizon: 2
+n_obs_steps: 2
+n_action_steps: 1
+n_latency_steps: 0
+past_action_visible: False
+keypoint_visible_rate: 1.0
+obs_as_local_cond: False
+obs_as_global_cond: False
+pred_action_steps_only: False
+dataset_obs_steps: ${n_obs_steps}
+
+
+
+policy:
+  _target_: diffusion_policy.policy.bet_image_policy.BETImagePolicy
+  shape_meta: ${shape_meta}
+
+  obs_encoder_group_norm: True
+  eval_fixed_crop: True
+  crop_shape: [76, 76]
+
+  action_ae:
+    _target_: diffusion_policy.model.bet.action_ae.discretizers.k_means.KMeansDiscretizer
+    num_bins: 24
+    action_dim: ${task.shape_meta.action.shape[0]}
+    predict_offsets: True
+  
+  # obs_encoder:
+  #   _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+  #   shape_meta: ${shape_meta}
+  #   rgb_model:
+  #     _target_: diffusion_policy.model.vision.model_getter.get_resnet
+  #     name: resnet18
+  #     weights: IMAGENET1K_V1 # or r3m
+  #   resize_shape: null
+  #   random_crop: False
+  #   use_group_norm: False
+  #   share_rgb_model: True
+  #   imagenet_norm: True
+
+  state_prior:
+    _target_: diffusion_policy.model.bet.latent_generators.mingpt.MinGPT
+    discrete_input: false
+    # input_dim: ${policy.obs_encoding_net.output_dim}
+    input_dim: 137
+    vocab_size: ${policy.action_ae.num_bins}
+
+    # Architecture details
+    n_layer: 4
+    n_head: 4
+    n_embd: 72
+
+    block_size: ${horizon}  # Length of history/context
+    predict_offsets: True
+    offset_loss_scale: 1000.0  # actions are very small
+    focal_loss_gamma: 2.0
+    action_dim: ${task.shape_meta.action.shape[0]}
+
+  horizon: ${horizon}
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+
+dataloader:
+  batch_size: 32
+  num_workers: 10
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+val_dataloader:
+  batch_size: 32
+  num_workers: 10
+  shuffle: False
+  pin_memory: True
+  persistent_workers: False
+
+optimizer:
+  learning_rate: 0.0001 # 1e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+
+training:
+  device: "cpu"
+  seed: 42
+  debug: True
+  resume: True
+  # optimization
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 5000
+  gradient_accumulate_every: 1
+  grad_norm_clip: 1.0
+  enable_normalizer: True
+  # training loop control
+  # in epochs
+  rollout_every: 50
+  checkpoint_every: 50
+  val_every: 1
+  sample_every: 5
+  # steps per epoch
+  max_train_steps: null
+  max_val_steps: null
+  # misc
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: bet_image_debug
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: test_mean_score
+    mode: max
+    k: 5
+    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}
