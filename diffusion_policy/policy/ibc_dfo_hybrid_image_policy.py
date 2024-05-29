@@ -419,20 +419,23 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         return repeated_stats
 
 
-    def train_adv_patch(self, batch, adv_patch, cfg):
+    def train_adv_patch(self, batch, adv_patch, mask, cfg):
         """
         Train an adversarial patch for the batch of images.
         """
         B = batch['obs'][cfg.view].shape[0]
         T_neg = self.train_n_neg
         T_a = self.n_action_steps
-        adv_patch = adv_patch.unsqueeze(0).to(self.device)
+        if len(adv_patch.shape) == 3:
+            adv_patch = adv_patch.unsqueeze(0).to(self.device)
+        else:
+            adv_patch = adv_patch.to(self.device)
         obs_dict = batch['obs']
         obs_dict = dict_apply(obs_dict, lambda x: x.to(self.device))
         # check if the obs_dict[cfg.view] is in the correct range
         assert torch.min(obs_dict[cfg.view].flatten()) >= 0
         assert torch.max(obs_dict[cfg.view].flatten()) <= 1
-        perturbed_view = obs_dict[cfg.view] + adv_patch
+        perturbed_view = obs_dict[cfg.view] * (1 - mask) + adv_patch * mask
         perturbed_view = perturbed_view.clamp(0, 1)
         perturbed_obs_dict = obs_dict.copy()
 
@@ -453,10 +456,10 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             low=naction_stats['min'],
             high=naction_stats['max']
         ).sample((B, T_neg, T_a)).to(device=self.device)
-        print(min(action_samples.flatten()), max(action_samples.flatten()))
+        # print(min(action_samples.flatten()), max(action_samples.flatten()))
         action_samples = torch.cat([target_actions.unsqueeze(1), action_samples], dim=1)
         action_samples[:, 1, ...] = clean_actions
-        print(min(action_samples.flatten()), max(action_samples.flatten()))
+        # print(min(action_samples.flatten()), max(action_samples.flatten()))
         prev_obs_dict = obs_dict.copy()
         for j in range(cfg.n_iter):
             loss, perturbed_obs_dict, nobs_features = self.compute_loss_with_grad(perturbed_obs_dict, target_actions, action_samples)
@@ -465,14 +468,15 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             print(f'Loss at iteration {j}: {loss.item()}')
             assert perturbed_obs_dict[cfg.view].grad is not None
             grad = torch.sign(perturbed_obs_dict[cfg.view].grad)
+            grad = grad * mask
             grad = torch.sum(grad, dim=0)
             adv_patch = adv_patch + cfg.eps_iter * grad
             adv_patch = torch.clamp(adv_patch, -cfg.eps, cfg.eps)
-            perturbed_obs_dict[cfg.view] = torch.clamp(obs_dict[cfg.view] + adv_patch, cfg.clip_min, cfg.clip_max)
+            perturbed_obs_dict[cfg.view] = torch.clamp(obs_dict[cfg.view] * (1 - mask) + adv_patch * mask, \
+                cfg.clip_min, cfg.clip_max)
             # perturbed_obs_dict[cfg.view] = torch.clamp(perturbed_obs_dict[cfg.view] + cfg.eps_iter * grad, 0, 1)
             perturbed_obs_dict = dict_apply(perturbed_obs_dict, lambda x: x.clone().detach().requires_grad_(True))
-
-        adv_patch = torch.clamp(adv_patch, -cfg.eps, cfg.eps).squeeze(0)
+        adv_patch = torch.clamp(adv_patch, -cfg.eps, cfg.eps)
         return adv_patch, loss.item()
 
     def action_dist(self, obs_dict: Dict[str, torch.Tensor]):

@@ -94,3 +94,115 @@ def clip_perturb(eta, norm, eps):
         )
         eta *= factor
     return eta
+
+def get_patch_positions(mask):
+    # Find the coordinates where the mask is 1
+    coords = torch.nonzero(mask == 1)
+    
+    # Get the top-left and bottom-right coordinates
+    top_left = coords.min(dim=0).values
+    bottom_right = coords.max(dim=0).values
+    
+    # Convert to tuples
+    top_left = (top_left[0].item(), top_left[1].item())
+    bottom_right = (bottom_right[0].item(), bottom_right[1].item())
+    
+    return top_left, bottom_right
+
+
+
+def swap_mask_position(mask, patch_shape, top_left, bottom_right, new_top_left):
+    """
+    Swap the patch to a new position in the mask.
+    
+    Inputs:
+    mask: torch.Tensor, shape (image_size, image_size). The mask tensor with 1s indicating the patch position.
+    patch_shape: tuple. The shape of the patch. (patch_size, patch_size)
+    new_top_left: tuple. The new top-left position for the patch (start_x, start_y).
+    
+    Returns:
+    new_mask: torch.Tensor, shape (image_size, image_size). The updated mask tensor with the patch at the new position.
+    """
+    # Get the top-left and bottom-right positions of the original patch
+     
+    # Extract the patch from the mask
+    patch = mask[top_left[0]:bottom_right[0] + 1, top_left[1]:bottom_right[1] + 1]
+    
+    # Set the original patch position in the mask to zero
+    mask[top_left[0]:bottom_right[0] + 1, top_left[1]:bottom_right[1] + 1] = 0
+    
+    # Calculate the new bottom-right position
+    new_bottom_right = (new_top_left[0] + patch_shape[0] - 1, new_top_left[1] + patch_shape[1] - 1)
+    
+    # Place the extracted patch at the new position
+    mask[new_top_left[0]:new_bottom_right[0] + 1, new_top_left[1]:new_bottom_right[1] + 1] = patch
+    
+    return mask
+
+
+def swap_patch_position(patch, mask, patch_shape, top_left, bottom_right, new_top_left):
+    """
+    Swap the patch to a new position in the mask.
+
+    Inputs:
+    mask: torch.Tensor, shape (C, image_size, image_size). The mask tensor with 1s indicating the patch position.
+    patch_shape: tuple. The shape of the patch. (C, patch_size, patch_size)
+    new_top_left: tuple. The new top-left position for the patch (start_x, start_y).
+
+    Returns:
+    new_mask: torch.Tensor, shape (C, image_size, image_size). The updated mask tensor with the patch at the new position.
+    """
+
+    # Extract the patch from the mask
+    patch_cp= patch[:, top_left[0]:bottom_right[0] + 1, top_left[1]:bottom_right[1] + 1]
+
+    # Set the original patch position in the mask to zero
+    patch[:, top_left[0]:bottom_right[0] + 1, top_left[1]:bottom_right[1] + 1] = 0
+
+    # Calculate the new bottom-right position
+    new_bottom_right = (new_top_left[0] + patch_shape[0] - 1, new_top_left[1] + patch_shape[1] - 1)
+
+    # Place the extracted patch at the new position
+    patch[:, new_top_left[0]:new_bottom_right[0] + 1, new_top_left[1]:new_bottom_right[1] + 1] = patch_cp
+
+    return patch
+def transform_square_patch(patch, mask, patch_shape, data_shape):
+    """
+    Transform a batch of square patches randomly in orientation, size, and position.
+
+    Inputs:
+    patch: torch.Tensor, shape (B, C, H, W). The batch of patches to transform.
+    mask: torch.Tensor, shape (H, W). The mask of the patch, same for all patches.
+    patch_shape: tuple. The shape of the patch. (patch_size, patch_size)
+    data_shape: tuple. The shape of the data. (B, C, H, W)
+
+    Returns:
+    patch: torch.Tensor, shape (B, C, H, W). The transformed batch of patches.
+    mask: torch.Tensor, shape (H, W). The transformed mask.
+    """
+    # assuming data shape is square
+    assert data_shape[-2] == data_shape[-1]
+    image_size = data_shape[-1]
+    B = data_shape[0]
+    
+    # random rotate
+    num_rot = torch.randint(4, (1,)).item()
+    patch = torch.rot90(patch, num_rot, [2, 3])
+    mask = torch.rot90(mask, num_rot, [0, 1])
+
+    # random position
+    max_x = image_size - patch_shape[0]
+    max_y = image_size - patch_shape[1]
+    start_x = torch.randint(max_x, (B,))
+    start_y = torch.randint(max_y, (B,))
+
+    # move the patches to the new positions
+    top_left, bottom_right = get_patch_positions(mask)
+    for i in range(patch.shape[0]):
+        patch[i] = swap_patch_position(patch[i], mask, patch_shape, top_left, bottom_right, (start_x[i], start_y[i]))
+    mask = swap_mask_position(mask, patch_shape, top_left, bottom_right, (start_x.mode(keepdim=True).values.item(), start_y.mode(keepdim=True).values.item()))
+
+    print(f"Rotated {num_rot} times and moved to random positions.")
+    print(f"Shape of the mask and patch: {mask.shape}, {patch.shape}")
+
+    return patch, mask

@@ -3,7 +3,7 @@ defaults:
   - task: lift_image
 
 name: train_ibc_dfo_hybrid
-_target_: diffusion_policy.workspace.train_ibc_dfo_hybrid_workspace.TrainIbcDfoHybridWorkspace
+_target_: diffusion_policy.workspace.train_ibc_dfo_hybrid_workspace.train_uni_adv_patch_ibc_image_workspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -23,6 +23,7 @@ perturbations: [0, 0.15, 0.15, 0, 0, 0, 0]
 n_iter: 40
 clip_min: 0
 clip_max: 1
+patch_size: 16
 
 policy:
   _target_: diffusion_policy.policy.ibc_dfo_hybrid_image_policy.IbcDfoHybridImagePolicy

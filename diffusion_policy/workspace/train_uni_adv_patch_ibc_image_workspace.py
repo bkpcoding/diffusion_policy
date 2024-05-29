@@ -21,6 +21,7 @@ from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.workspace.train_robomimic_image_workspace import TrainRobomimicImageWorkspace
 from diffusion_policy.workspace.train_ibc_dfo_hybrid_workspace import TrainIbcDfoHybridWorkspace
+from diffusion_policy.utils.attack_utils import transform_square_patch
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 class TrainUniAdvPatchIbcImageWorkspace(BaseWorkspace):
@@ -50,6 +51,7 @@ class TrainUniAdvPatchIbcImageWorkspace(BaseWorkspace):
         # configure training state
         self.global_step = 0
         self.epoch = 0
+        cfg.task.env_runner.n_envs = 1
 
 
     def run(self):
@@ -81,6 +83,9 @@ class TrainUniAdvPatchIbcImageWorkspace(BaseWorkspace):
         self.model.eval()
 
         self.adv_patch = torch.zeros((1, 3, 84, 84)).to(self.model.device)
+        # create an initial mask for the patch at top left corner
+        mask = torch.zeros((84, 84)).to(self.model.device)
+        mask[:cfg.patch_size, :cfg.patch_size] = 1
 
         # device transfer
         device = torch.device(cfg.training.device)
@@ -117,23 +122,26 @@ class TrainUniAdvPatchIbcImageWorkspace(BaseWorkspace):
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
                         batch = dict_apply(batch, lambda x: x.to(device))
-                        self.adv_patch, loss = self.model.train_adv_patch(batch, self.adv_patch, cfg)
+                        # transform patch
+                        self.adv_patch, mask = transform_square_patch(patch = self.adv_patch, mask = mask, \
+                                patch_shape = (cfg.patch_size, cfg.patch_size), \
+                                data_shape = batch['obs']['robot0_eye_in_hand_image'].shape)
+                        self.adv_patch, loss = self.model.train_adv_patch(batch, self.adv_patch, mask, cfg)
                         train_losses.append(loss)
                         tepoch.set_postfix(loss=loss)
                     print(f"Epoch {self.epoch} train loss: {np.mean(train_losses)}")
                     self.epoch += 1
-
-                 # ========= eval for this epoch ==========
-                policy = self.model
-                policy.eval()
+                # ========= eval for this epoch ==========
+                # policy = self.model
+                # policy.eval()
 
                 # run rollout
-                runner_log = env_runner.run(policy)
-                print(runner_log)
+                # runner_log = env_runner.run(policy)
+                # print(runner_log)
 
                 # add the adversarial patch to the batch and evaluate
-                runner_log = env_runner.run(policy, adv_patch=self.adv_patch, cfg=cfg)
-                print(runner_log)
+                # runner_log = env_runner.run(policy, adv_patch=self.adv_patch, cfg=cfg)
+                # print(runner_log)
 
 
 @hydra.main(

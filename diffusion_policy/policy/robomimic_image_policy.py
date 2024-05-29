@@ -138,7 +138,7 @@ class RobomimicImagePolicy(BaseImagePolicy):
     def get_optimizer(self):
         return self.model.optimizers['policy']
 
-    def train_adv_patch(self, batch, adv_patch, cfg):
+    def train_adv_patch(self, batch, adv_patch, mask, cfg):
         """
         Train the adversarial patch on the batch of data
         Based on paper: https://arxiv.org/pdf/1610.08401
@@ -149,7 +149,7 @@ class RobomimicImagePolicy(BaseImagePolicy):
         adv_patch = adv_patch.unsqueeze(0).to(self.model.device)
 
         obs_dict = batch['obs']
-        perturbed_view = obs_dict[cfg.view] + adv_patch
+        perturbed_view = obs_dict[cfg.view]* (1 - mask) + adv_patch * mask
         # clamp the perturbed_obs to be within the range of the original image
         perturbed_view = torch.clamp(perturbed_view, 0, 1)
         obs_dict[cfg.view] = perturbed_view
@@ -170,6 +170,7 @@ class RobomimicImagePolicy(BaseImagePolicy):
         loss.backward()
         # perturb the observation with the gradient according to FGSM
         grad = torch.sign(perturbed_obs_dict[cfg.view].grad)
+        grad = grad * mask
         grad = torch.sum(grad, dim=0)
         adv_patch = adv_patch + cfg.eps_iter * grad
         # clip the adversarial patch to be within cfg.eps

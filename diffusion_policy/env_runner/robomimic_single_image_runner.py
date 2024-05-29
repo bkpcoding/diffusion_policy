@@ -422,7 +422,7 @@ class RobomimicSingleImageRunner(BaseImageRunner):
                 elif cfg.attack_type == 'patch':
                     adv_obs = self.apply_patch_attack(policy, obs_dict, cfg, epsilon, clean_action, action_samples)
                     # save the perturbed image
-                    perturbed_image = adv_obs['robot0_eye_in_hand_image'].squeeze(0).detach().cpu().numpy()[0]
+                    perturbed_image = adv_obs['robot0_eye_in_hand_image'].squeeze(0).detach().cpu().numpy()[1]
                     print(max(perturbed_image.flatten()), min(perturbed_image.flatten()))
                     plt.imsave(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/images/adversarial_patch/patch_attack_{perturbation}.png', perturbed_image.transpose(1, 2, 0))
                 # loss_per_perturbation[perturbation] = self.loss_per_iteration

@@ -1,0 +1,37 @@
+name: carla_image
+
+image_shape: &image_shape [3, 224, 224]
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  obs:
+    image:
+      shape: *image_shape
+      type: rgb
+  action:
+    shape: [2]
+
+
+env_runner:
+  _target_: diffusion_policy.env_runner.carla_image_runner.CarlaImageRunner
+  n_train: 6
+  n_train_vis: 2
+  train_start_seed: 0
+  n_test: 50
+  n_test_vis: 4
+  test_start_seed: 100000
+  max_steps: 350
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  fps: 5
+  past_action: ${past_action_visible}
+  abs_action: False
+  n_envs: null
+
+dataset:
+  _target_: diffusion_policy.dataset.carla_image_dataset.CarlaImageDataset
+  zarr_path: data/carla/carla_data.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.02

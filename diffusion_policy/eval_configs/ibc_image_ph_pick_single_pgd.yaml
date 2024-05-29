@@ -3,7 +3,7 @@ checkpoints: ['/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/e
 task: 'lift_ph'
 dataset_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/robomimic/datasets/lift/ph/image.hdf5'
 algo: 'ibc'
-device: 'cuda:0'
+device: 'cpu'
 attack: True
 attack_type: 'pgd'
 seed: 1023
@@ -23,7 +23,7 @@ rand_target: False
 action_space: None
 n_train: 1
 n_test: 1
-
+n_epochs: 4
 
 # pgd:
 #  eta_bound:
