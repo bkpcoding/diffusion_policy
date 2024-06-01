@@ -1,0 +1,29 @@
+_target_: 'diffusion_policy.env_runner.robomimic_image_runner.AdversarialRobomimicImageRunnerBET'
+checkpoints: ['/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/outputs/2024.05.30/05.11.29_train_bet_image_lift_image/checkpoints/epoch=0050-test_mean_score=0.944.ckpt']
+task: 'lift_ph'
+dataset_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/robomimic/datasets/lift/ph/image.hdf5'
+algo: 'BET'
+n_envs: 1
+n_test: 1
+n_train: 1
+log: False
+device: 'cpu'
+attack: True
+attack_type: 'fgsm'
+epsilons: [0.015625, 0.03125, 0.0625, 0.125]
+# epsilons: [0.01, 0.03, 0.1, 0.3, 0.5]
+# epsilons: [0.0078125, 0.01953125, 0.03125, 0.0625, 0.125]
+# epsilons: [0.125, 0.2, 0.3]
+clip_min: 0
+clip_max: 1
+view: 'both'
+rand_target: False
+action_space: None
+rand_int: False
+perturbations: [0, 0.15, 0.15, 0, 0, 0, 0]
+
+# pgd:
+#  eta_bound:
+#  num_iter:
+#  norm:
+#  rand_int:

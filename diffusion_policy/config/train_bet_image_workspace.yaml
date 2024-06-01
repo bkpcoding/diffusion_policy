@@ -21,7 +21,6 @@ pred_action_steps_only: False
 dataset_obs_steps: ${n_obs_steps}
 
 
-
 policy:
   _target_: diffusion_policy.policy.bet_image_policy.BETImagePolicy
   shape_meta: ${shape_meta}
@@ -91,14 +90,14 @@ optimizer:
   betas: [0.9, 0.95]
 
 training:
-  device: "cpu"
+  device: "cuda:0"
   seed: 42
   debug: True
   resume: True
   # optimization
   lr_scheduler: cosine
-  lr_warmup_steps: 500
-  num_epochs: 5000
+  lr_warmup_steps: 50
+  num_epochs: 500
   gradient_accumulate_every: 1
   grad_norm_clip: 1.0
   enable_normalizer: True
@@ -106,16 +105,17 @@ training:
   # in epochs
   rollout_every: 50
   checkpoint_every: 50
-  val_every: 1
-  sample_every: 5
+  val_every: 5
+  sample_every: 10
   # steps per epoch
   max_train_steps: null
   max_val_steps: null
   # misc
   tqdm_interval_sec: 1.0
+  sample_max_batch: 32
 
 logging:
-  project: bet_image_debug
+  project: bet_image_policy
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}

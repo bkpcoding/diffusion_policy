@@ -18,7 +18,7 @@ from hydra.core.global_hydra import GlobalHydra
 
 
 # torch.backends.cudnn.enabled = False
-@hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_pgd_adversarial')
+@hydra.main(config_path='diffusion_policy/eval_configs', config_name='diffusion_policy_image_ph_pick_pgd_adversarial')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_adversarial')
 def main(cfg):
     checkpoint = cfg.checkpoints[0]
@@ -33,14 +33,15 @@ def main(cfg):
     view = cfg.view
 
     if log:
-        wandb.init(project='BC_Evaluation', name=f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-\
-        {checkpoint.split("/")[-3]}-{cfg.attack_type}_adversarial_on_{view}_randtar_{cfg.rand_target}' if attack else
-        f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-{checkpoint.split("/")[-3]}')
-        wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-rand_target-{cfg.rand_target}-rand_init-{cfg.rand_int}')
+        # wandb.init(project='BC_Evaluation', name=f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-\
+        #     {checkpoint.split("/")[-3]}-{cfg.attack_type}_adversarial_on_{view}_randtar_{cfg.rand_target}' if attack else
+        #     f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-{checkpoint.split("/")[-3]}')
+        # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-rand_target-{cfg.rand_target}-rand_init-{cfg.rand_int}')
         # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-target_perturbations-{cfg.target_perturbations}-pertubation-{cfg.perturbations[1]}')
-        # wandb.init(project="BC_Evaluation", id='3cfkdwmo', resume='must')
+        # wandb.init(project="BC_Evaluation", id='skjusrmy', resume='must')
+        wandb.init(project='diffusion_experimentation', name=f'diffusion_policy_{cfg.epsilons[0]}_steps_all')
         config_path = 'diffusion_policy/eval_configs'
-        config_name = 'ibc_image_ph_pick_pgd_adversarial'
+        config_name = 'diffusion_policy_image_ph_pick_pgd_adversarial'
         config_file_path = to_absolute_path(f"{config_path}/{config_name}.yaml")
         # save the config file to wandb from the hydras config
         wandb.save(config_file_path)
@@ -65,7 +66,10 @@ def main(cfg):
                 workspace = cls(cfg_loaded, output_dir=output_dir)
                 workspace: BaseWorkspace
                 workspace.load_payload(payload, exclude_keys=None, include_keys=None)
-                policy = workspace.model
+                try:
+                    policy = workspace.model
+                except AttributeError:
+                    policy = workspace.policy
 
                 if attack:
                     print("Running adversarial Attack")
@@ -126,7 +130,10 @@ def main(cfg):
             workspace: BaseWorkspace
             workspace.load_payload(payload, exclude_keys=None, include_keys=None)
 
-            policy = workspace.model
+            try:
+                policy = workspace.model
+            except AttributeError:
+                policy = workspace.policy
 
             if attack:
                 print("Running adversarial Attack")

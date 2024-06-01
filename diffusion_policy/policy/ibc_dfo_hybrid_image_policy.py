@@ -426,6 +426,7 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         B = batch['obs'][cfg.view].shape[0]
         T_neg = self.train_n_neg
         T_a = self.n_action_steps
+        mask = mask.to(self.device)
         if len(adv_patch.shape) == 3:
             adv_patch = adv_patch.unsqueeze(0).to(self.device)
         else:
@@ -465,11 +466,12 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             loss, perturbed_obs_dict, nobs_features = self.compute_loss_with_grad(perturbed_obs_dict, target_actions, action_samples)
             loss = -loss
             loss.backward()
-            print(f'Loss at iteration {j}: {loss.item()}')
+            # print(f"Iteration {j}, Loss: {loss.item()}")
             assert perturbed_obs_dict[cfg.view].grad is not None
             grad = torch.sign(perturbed_obs_dict[cfg.view].grad)
             grad = grad * mask
-            grad = torch.sum(grad, dim=0)
+            # just take the grad of current image, not the previous image
+            grad = torch.sum(grad, dim=0)[1]
             adv_patch = adv_patch + cfg.eps_iter * grad
             adv_patch = torch.clamp(adv_patch, -cfg.eps, cfg.eps)
             perturbed_obs_dict[cfg.view] = torch.clamp(obs_dict[cfg.view] * (1 - mask) + adv_patch * mask, \

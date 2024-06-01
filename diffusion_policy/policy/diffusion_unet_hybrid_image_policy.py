@@ -207,7 +207,8 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
                 ).prev_sample
         
         # finally make sure conditioning is enforced
-        trajectory[condition_mask] = condition_data[condition_mask]        
+        trajectory[condition_mask] = condition_data[condition_mask]
+        print(trajectory.shape, condition_mask)        
 
         return trajectory
 

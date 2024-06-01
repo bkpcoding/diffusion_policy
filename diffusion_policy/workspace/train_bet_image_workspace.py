@@ -103,7 +103,7 @@ class TrainBETImageWorkspace(BaseWorkspace):
         )
         print("Configuring environment runner")
         # configure env
-        cfg.task.env_runner.n_envs = 2
+        # cfg.task.env_runner.n_envs = 2
         env_runner: BaseImageRunner
         env_runner = hydra.utils.instantiate(
             cfg.task.env_runner,
@@ -111,16 +111,16 @@ class TrainBETImageWorkspace(BaseWorkspace):
         assert isinstance(env_runner, BaseImageRunner)
 
         # configure logging
-        # wandb_run = wandb.init(
-        #     dir=str(self.output_dir),
-        #     config=OmegaConf.to_container(cfg, resolve=True),
-        #     **cfg.logging
-        # )
-        # wandb.config.update(
-        #     {
-        #         "output_dir": self.output_dir,
-        #     }
-        # )
+        wandb_run = wandb.init(
+            dir=str(self.output_dir),
+            config=OmegaConf.to_container(cfg, resolve=True),
+            **cfg.logging
+        )
+        wandb.config.update(
+            {
+                "output_dir": self.output_dir,
+            }
+        )
 
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
@@ -206,20 +206,20 @@ class TrainBETImageWorkspace(BaseWorkspace):
                 policy.eval()
 
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0:
+                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch > 0:
                     runner_log = env_runner.run(policy)
                     # log all
                     step_log.update(runner_log)
 
                 # run validation
-                if (self.epoch % cfg.training.val_every) == 0:
+                if (self.epoch % cfg.training.val_every) == 0 and self.epoch > 0:
                     with torch.no_grad():
                         val_losses = list()
                         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                             for batch_idx, batch in enumerate(tepoch):
                                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                                loss = self.policy.compute_loss(batch)
+                                loss, _ = self.policy.compute_loss(batch)
                                 val_losses.append(loss)
                                 if (cfg.training.max_val_steps is not None) \
                                     and batch_idx >= (cfg.training.max_val_steps-1):
@@ -230,7 +230,7 @@ class TrainBETImageWorkspace(BaseWorkspace):
                             step_log['val_loss'] = val_loss
 
                 # run diffusion sampling on a training batch
-                if (self.epoch % cfg.training.sample_every) == 0:
+                if (self.epoch % cfg.training.sample_every) == 0 and self.epoch > 0:
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
                         batch = train_sampling_batch
@@ -257,7 +257,7 @@ class TrainBETImageWorkspace(BaseWorkspace):
                         del mse
                 
                 # checkpoint
-                if (self.epoch % cfg.training.checkpoint_every) == 0:
+                if (self.epoch % cfg.training.checkpoint_every) == 0 and self.epoch > 0:
                     # checkpointing
                     if cfg.checkpoint.save_last_ckpt:
                         self.save_checkpoint()

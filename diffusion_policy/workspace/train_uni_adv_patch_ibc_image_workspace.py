@@ -123,9 +123,11 @@ class TrainUniAdvPatchIbcImageWorkspace(BaseWorkspace):
                     for batch_idx, batch in enumerate(tepoch):
                         batch = dict_apply(batch, lambda x: x.to(device))
                         # transform patch
+                        # print(f"Mask before: {mask}")
                         self.adv_patch, mask = transform_square_patch(patch = self.adv_patch, mask = mask, \
                                 patch_shape = (cfg.patch_size, cfg.patch_size), \
                                 data_shape = batch['obs']['robot0_eye_in_hand_image'].shape)
+                        # # print(f"Mask after: {mask}")
                         self.adv_patch, loss = self.model.train_adv_patch(batch, self.adv_patch, mask, cfg)
                         train_losses.append(loss)
                         tepoch.set_postfix(loss=loss)

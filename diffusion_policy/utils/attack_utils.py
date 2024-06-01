@@ -126,7 +126,7 @@ def swap_mask_position(mask, patch_shape, top_left, bottom_right, new_top_left):
     # Get the top-left and bottom-right positions of the original patch
      
     # Extract the patch from the mask
-    patch = mask[top_left[0]:bottom_right[0] + 1, top_left[1]:bottom_right[1] + 1]
+    patch = mask[top_left[0]:bottom_right[0] + 1, top_left[1]:bottom_right[1] + 1].clone()
     
     # Set the original patch position in the mask to zero
     mask[top_left[0]:bottom_right[0] + 1, top_left[1]:bottom_right[1] + 1] = 0
@@ -154,18 +154,22 @@ def swap_patch_position(patch, mask, patch_shape, top_left, bottom_right, new_to
     """
 
     # Extract the patch from the mask
-    patch_cp= patch[:, top_left[0]:bottom_right[0] + 1, top_left[1]:bottom_right[1] + 1]
+    patch_cp= patch[:, top_left[0]:bottom_right[0] + 1, top_left[1]:bottom_right[1] + 1].clone()
 
     # Set the original patch position in the mask to zero
     patch[:, top_left[0]:bottom_right[0] + 1, top_left[1]:bottom_right[1] + 1] = 0
 
     # Calculate the new bottom-right position
     new_bottom_right = (new_top_left[0] + patch_shape[0] - 1, new_top_left[1] + patch_shape[1] - 1)
+    # print(f"New top left: {new_top_left}")
+    # print(f"New bottom right: {new_bottom_right}")
 
     # Place the extracted patch at the new position
     patch[:, new_top_left[0]:new_bottom_right[0] + 1, new_top_left[1]:new_bottom_right[1] + 1] = patch_cp
-
+    # print(f"Patch: {patch}")
     return patch
+
+
 def transform_square_patch(patch, mask, patch_shape, data_shape):
     """
     Transform a batch of square patches randomly in orientation, size, and position.
@@ -184,25 +188,64 @@ def transform_square_patch(patch, mask, patch_shape, data_shape):
     assert data_shape[-2] == data_shape[-1]
     image_size = data_shape[-1]
     B = data_shape[0]
+    C = data_shape[2]
     
     # random rotate
-    num_rot = torch.randint(4, (1,)).item()
-    patch = torch.rot90(patch, num_rot, [2, 3])
-    mask = torch.rot90(mask, num_rot, [0, 1])
+    # rotate the patch where the mask is 1
+    patch_ = torch.zeros((C, patch_shape[0], patch_shape[1]))
+    patch_ = patch[0, :, mask == 1].clone()
+    patch_ = patch_.reshape(C, patch_shape[0], patch_shape[1])
+    if torch.rand(1) > 0.5:
+        patch_ = torch.rot90(patch_, 1, [1, 2])
+    # put the patch back to the original position
+    patch[0, :, mask == 1] = patch_.reshape(patch_.shape[0], -1)
+    # mask = torch.rot90(mask, num_rot, [0, 1])
 
     # random position
     max_x = image_size - patch_shape[0]
     max_y = image_size - patch_shape[1]
-    start_x = torch.randint(max_x, (B,))
-    start_y = torch.randint(max_y, (B,))
+    start_x = torch.randint(max_x, (1,))
+    # make sure that the patch is not near the central area as it may block the block
+    central_area_coords = (image_size // 2 - 20, image_size // 2 + 20)
+    # print(f"Central area coords: {central_area_coords}")
+    while start_x[0] > central_area_coords[0] and start_x[0] < central_area_coords[1]:
+        start_x = torch.randint(max_x, (1,))
 
     # move the patches to the new positions
     top_left, bottom_right = get_patch_positions(mask)
+    # print(f"Top left and bottom right: {top_left}, {bottom_right}")
     for i in range(patch.shape[0]):
-        patch[i] = swap_patch_position(patch[i], mask, patch_shape, top_left, bottom_right, (start_x[i], start_y[i]))
-    mask = swap_mask_position(mask, patch_shape, top_left, bottom_right, (start_x.mode(keepdim=True).values.item(), start_y.mode(keepdim=True).values.item()))
+        patch[i] = swap_patch_position(patch[i], mask, patch_shape, top_left, bottom_right, (start_x[0], start_x[0]))
+    mask = swap_mask_position(mask, patch_shape, top_left, bottom_right, (start_x[0], start_x[0]))
+    # print(f"start_x: {start_x[0]}")
 
-    print(f"Rotated {num_rot} times and moved to random positions.")
-    print(f"Shape of the mask and patch: {mask.shape}, {patch.shape}")
+    # print(f"Shape of the mask and patch: {mask.shape}, {patch.shape}")
 
     return patch, mask
+
+if __name__ == "__main__":
+    # mask = torch.zeros((5, 5))
+    # mask[1:3, 1:3] = 1
+    # patch = torch.zeros((1, 1, 5 ,5))
+    # patch[0, 0, 1:3, 1:3] = 3
+    # print(patch)
+    # patch, mask = transform_square_patch(patch, mask, (2, 2), (1, 1, 5, 5))
+    # print(mask)
+    # print(patch)
+    # test with an image
+    obs_dict = np.load("/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/obs_dict.npy")
+    # get one image
+    image = obs_dict[0, 0]
+    image = torch.from_numpy(image)
+    mask = torch.zeros((image.shape[1], image.shape[1]))
+    mask[0: 15, 0: 15] = 1
+    patch = torch.zeros((1, 3, 84, 84))
+    patch[0, :, 0:7, 0:7] = 0.5
+    patch[0, :, 8:15, 8:15] = 0.8
+    patch, mask = transform_square_patch(patch, mask, (15, 15), (1, 2, 3, 84, 84))
+    # overlay the patch on the image
+    image = (image * (1 - mask) + mask * patch).squeeze(0)
+    # save the image to check
+    import matplotlib.pyplot as plt
+    plt.imshow(image.permute(1, 2, 0))
+    plt.savefig("image.png")

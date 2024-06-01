@@ -19,11 +19,11 @@ keypoint_visible_rate: 1.0
 view: 'robot0_eye_in_hand_image'
 eps_iter: 0.01
 eps: 0.125
-perturbations: [0, 0.15, 0.15, 0, 0, 0, 0]
+perturbations: [0, 0.1, 0.1, 0, 0, 0, 0]
 n_iter: 40
 clip_min: 0
 clip_max: 1
-patch_size: 16
+patch_size: 24
 
 policy:
   _target_: diffusion_policy.policy.ibc_dfo_hybrid_image_policy.IbcDfoHybridImagePolicy
@@ -65,7 +65,7 @@ optimizer:
   weight_decay: 1.0e-6
 
 training:
-  device: "cpu"
+  device: "cuda:0"
   seed: 1023
   debug: False
   resume: True

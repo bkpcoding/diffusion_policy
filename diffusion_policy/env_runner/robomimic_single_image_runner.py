@@ -78,10 +78,11 @@ class RobomimicSingleImageRunner(BaseImageRunner):
         # disable object state observation
         env_meta['env_kwargs']['use_object_obs'] = False
 
-        rotation_transformer = None
+        self.rotation_transformer = None
+        self.abs_action = abs_action
         if abs_action:
             env_meta['env_kwargs']['controller_configs']['control_delta'] = False
-            rotation_transformer = RotationTransformer('axis_angle', 'rotation_6d')
+            self.rotation_transformer = RotationTransformer('axis_angle', 'rotation_6d')
         def init_fn(env, seed=42,
             enable_render=True):
             # setup rendering
@@ -138,8 +139,11 @@ class RobomimicSingleImageRunner(BaseImageRunner):
                 lambda x: x.detach().to('cpu').numpy())
             action = np_action_dict['action'].squeeze(0)
             if perturbation is not None:
-                action_perturbation = np.array([-1*perturbation, perturbation, 0, 0, 0, 0, 0]).reshape(action.shape)
+                action_perturbation = np.array([0, perturbation, perturbation, 0, 0, 0, 0, 0, 0, 0])
+                # action_perturbation = np.array([0, perturbation, 0, 0, 0, 0, 0]).reshape(action.shape)
                 action = action + action_perturbation
+            if self.abs_action:
+                action = self.undo_transform_action(action)
             obs, reward, done, info = self.env.step(action)
             timestep += 1
             if timestep % 100 == 0:
@@ -155,8 +159,28 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             im = ax.imshow(observations[i][0, :, :, :].transpose(1, 2, 0))
             ims.append([im])
         ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
-        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/perturbed_pick_0.1_two_perturb.gif', writer='imagemagick', fps=4)
-        
+        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/diffusion_perturbed_pick_0.15_two_perturb.gif', writer='imagemagick', fps=4)
+    
+    def undo_transform_action(self, action):
+        raw_shape = action.shape
+        if raw_shape[-1] == 20:
+            # dual arm
+            action = action.reshape(-1,2,10)
+
+        d_rot = action.shape[-1] - 4
+        pos = action[...,:3]
+        rot = action[...,3:3+d_rot]
+        gripper = action[...,[-1]]
+        rot = self.rotation_transformer.inverse(rot)
+        uaction = np.concatenate([
+            pos, rot, gripper
+        ], axis=-1)
+
+        if raw_shape[-1] == 20:
+            # dual arm
+            uaction = uaction.reshape(*raw_shape[:-1], 14)
+
+        return uaction
 
 
     def run(self, policy:BaseImagePolicy, epsilon=0.1, cfg=None):

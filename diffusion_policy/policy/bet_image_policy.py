@@ -129,18 +129,25 @@ class BETImagePolicy(BaseImagePolicy):
                 )
             )
 
-        obs_feature_dim = obs_encoder.output_shape()[0]
+        self.obs_feature_dim = obs_encoder.output_shape()[0]
 
 
     # ========= inference  ============
-    def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def predict_action(self, obs_dict: Dict[str, torch.Tensor], return_latent = False) -> Dict[str, torch.Tensor]:
         """
-        obs_dict: must include "obs" key
-        result: must include "action" key
+        Predict action given observation
         """
-        assert 'obs' in obs_dict
-        assert 'past_action' not in obs_dict
-        raise NotImplementedError("Not implemented yet")
+        obs = dict_apply(obs_dict, lambda x: x.to(self.device).requires_grad_(True))
+        nobs = self.normalizer.normalize(obs)
+        this_obs = dict_apply(nobs, lambda x: x[:, :self.n_obs_steps, ...].reshape(-1, *x.shape[2:]))
+        nobs_features = self.obs_encoder(this_obs)
+        # reshape back to B, To, Do
+        nobs_features = nobs_features.reshape(-1, self.n_obs_steps, self.obs_feature_dim)
+        latent = self.state_prior.generate_latents(nobs_features)
+        if return_latent:
+            return {'latent': latent}
+        action = self.action_ae.decode_actions(latent, nobs_features)
+        return {'action': action}
 
     # ========= training  ============
     def set_normalizer(self, normalizer):
@@ -193,8 +200,9 @@ class BETImagePolicy(BaseImagePolicy):
         nobs_features = self.obs_encoder(this_nobs)
         # reshape nobs_features to B, To, Do
         nobs_features = nobs_features.reshape(B, To, -1)
-        print(f'obs_features shape: {nobs_features.shape}')
+        # print(f'obs_features shape: {nobs_features.shape}')
         latent = self.action_ae.encode_into_latent(naction, nobs_features)
+        # print(f'latent {latent}')
         _, loss, loss_components = self.state_prior.get_latent_and_loss(
             obs_rep=nobs_features,
             target_latents=latent,
