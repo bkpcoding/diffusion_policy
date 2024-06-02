@@ -6,23 +6,24 @@ algo: 'Diffusion_Policy'
 n_envs: 1
 n_test: 1
 n_train: 1
-log: False
-device: 'cpu'
+log: True
+device: 'cuda:0'
 attack: True
 attack_type: 'pgd'
 # epsilons: [0.015625, 0.03125, 0.0625, 0.125]
 # epsilons: [0.01, 0.03, 0.1, 0.3, 0.5]
 # epsilons: [0.0078125, 0.01953125, 0.03125, 0.0625, 0.125]
 epsilons: [0.125, 0.2, 0.3]
-clip_min: 0
+epsilon: 0.125
+clip_min: -1
 clip_max: 1
-view: 'both'
+view: 'robot0_eye_in_hand_image'
 rand_target: False
 action_space: None
 rand_int: False
-perturbations: [0, 0.15, 0.15, 0, 0, 0, 0, 0, 0, 0]
-eps_iter: [0.01]
-num_iter: 10
+perturbations: [0.15, 0.15, 0, 0, 0, 0, 0, 0, 0, 0]
+eps_iter: 0.01
+num_iter: 40
 norm: 'linf'
 attack_after_timesteps: 0.8
 # pgd:

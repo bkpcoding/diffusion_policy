@@ -1374,36 +1374,7 @@ class AdversarialRobomimicImageRunnerDP(RobomimicImageRunner):
         """
         Apply projected gradient descent attack from Madry et al. (2017)
         """
-        view = cfg.view
-        if view == 'both':
-                views = ['agentview_image', 'robot0_eye_in_hand_image']                
-        elif isinstance(view, list):
-            views = view
-        elif isinstance(view, str):
-            views = [view]
-        else:
-            raise ValueError("view must be a string or a list of strings")
-        num_iter = cfg.num_iter
-        clip_min = cfg.clip_min
-        clip_max = cfg.clip_max
-        norm = cfg.norm
-
-        adv_obs_dict = obs_dict.copy()
-        with torch.no_grad():
-            predicted_action = policy.predict_action(obs_dict)['action']
-        target_action = predicted_action + torch.tensor(cfg.perturbations).to(obs_dict['agentview_image'].device)
-        for i in range(num_iter):
-            policy.zero_grad()
-            adv_obs_dict = self.apply_fgsm_attack(adv_obs_dict, policy, cfg, target_action)
-            for view in views:
-                perturbation = adv_obs_dict[view] - obs_dict[view]
-                if norm == 'l2':
-                    perturbation = perturbation * self.epsilon / torch.norm(perturbation, p=2)
-                elif norm == 'linf':
-                    perturbation = torch.clamp(perturbation, -self.epsilon, self.epsilon)
-                adv_obs_dict[view] = obs_dict[view] + perturbation
-                adv_obs_dict[view] = torch.clamp(adv_obs_dict[view], clip_min, clip_max)
-        return adv_obs_dict
+        return policy.pgd_perturbed_obs(obs_dict, cfg)
 
     def run(self, policy: BaseImagePolicy, epsilon: float, cfg):
         self.epsilon = epsilon
@@ -1481,3 +1452,44 @@ class AdversarialRobomimicImageRunnerDP(RobomimicImageRunner):
                 else:
                     raise ValueError("Invalid attack type")
                 self.step += 1
+                with torch.no_grad():
+                    action = policy.predict_action(obs_dict)['action']
+                # device transfer
+                np_action = action.detach().to('cpu').numpy()
+                # step env
+                env_action = np_action
+                if self.abs_action:
+                    env_action = self.undo_transform_action(np_action)
+                obs, reward, done, info = env.step(env_action)
+                done = np.all(done)
+                past_action = np_action
+
+                # update pbar
+                pbar.update(action.shape[1])
+            pbar.close()
+
+        # clear out video buffer
+        _ = env.reset()
+        max_rewards = collections.defaultdict(list)
+        log_data = dict()
+        for i in range(n_inits):
+            seed = self.env_seeds[i]
+            prefix = self.env_prefixs[i]
+            max_reward = np.max(all_rewards[i])
+            max_rewards[prefix].append(max_reward)
+            log_data[prefix+f'sim_max_reward_{seed}'] = max_reward
+
+            # visualize sim
+            video_path = all_video_paths[i]
+            if video_path is not None:
+                sim_video = wandb.Video(video_path)
+                log_data[prefix+f'sim_video_{seed}'] = sim_video
+        
+        # log aggregate metrics
+        for prefix, value in max_rewards.items():
+            name = prefix+'mean_score'
+            value = np.mean(value)
+            log_data[name] = value
+        return log_data
+
+            

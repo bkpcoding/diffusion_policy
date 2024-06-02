@@ -161,6 +161,84 @@ class RobomimicSingleImageRunner(BaseImageRunner):
         ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
         ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/diffusion_perturbed_pick_0.15_two_perturb.gif', writer='imagemagick', fps=4)
     
+    def plot_trajectories(self, trajectories: list, filename, perturbed_trajectories=None, cfg=None):
+        # convert trajectories to tensor
+        trajectories = torch.stack(trajectories, dim=1)
+        trajectory_points_for_fig = trajectories[0, :, :, :3] # shape: (denoising_steps, n_samples, 3)
+        # convert to numpy
+        trajectory_points_for_fig = trajectory_points_for_fig.detach().cpu().numpy()
+        if perturbed_trajectories is not None:
+            perturbed_trajectories = torch.stack(perturbed_trajectories, dim=1)
+            perturbed_trajectory_points_for_fig = perturbed_trajectories[0, :, :, :3].detach().cpu().numpy()
+
+        # animate the trajectory evolution over denoising steps using 3D scatter plot
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        min_x, max_x = trajectory_points_for_fig[..., 0].min(), trajectory_points_for_fig[..., 0].max()
+        min_y, max_y = trajectory_points_for_fig[..., 1].min(), trajectory_points_for_fig[..., 1].max()
+        min_z, max_z = trajectory_points_for_fig[..., 2].min(), trajectory_points_for_fig[..., 2].max()
+        def animate(i):
+            ax.clear()
+            ax.set_xlim(min_x, max_x)
+            ax.set_ylim(min_y, max_y)
+            ax.set_zlim(min_z, max_z)
+            # 2D
+            # ax.scatter(trajectory_points_for_fig[i, :, 0], trajectory_points_for_fig[i, :, 1], alpha=0.7, color="#67a9cf", label="Trajectory samples")
+            # 3D
+            colors = np.linspace(0, 1, trajectory_points_for_fig.shape[1])
+            ax.scatter(trajectory_points_for_fig[i, :, 0], trajectory_points_for_fig[i, :, 1], trajectory_points_for_fig[i, :, 2], alpha=0.7, c=colors, cmap='rainbow', label="Trajectory samples")
+            if perturbed_trajectories is not None:
+                # 2D
+                # ax.scatter(perturbed_trajectory_points_for_fig[i, :, 0], perturbed_trajectory_points_for_fig[i, :, 1], alpha=0.7, color="#f46d43", label="Perturbed Trajectory samples")
+                # 3D
+                ax.scatter(perturbed_trajectory_points_for_fig[i, :, 0], perturbed_trajectory_points_for_fig[i, :, 1], perturbed_trajectory_points_for_fig[i, :, 2], alpha=0.7, c=colors, cmap='viridis', label="Perturbed Trajectory samples")
+            # 2D
+            # ax.text(-3, -2.5, f"Step: {i}", transform=ax.transAxes)
+            # 3D
+            ax.text(0.5, 0.5, 0.5, f"Step: {i}", transform=ax.transAxes)
+            ax.legend(loc='upper right', fontsize='small')
+        ani = animation.FuncAnimation(fig, animate, frames=trajectory_points_for_fig.shape[0], interval=100)
+        ani.save(filename, writer='imagemagick', fps=4)
+        # save the figure to wandb
+        if cfg.log:
+            # wait for the animation to finish
+            plt.close(fig)
+            wandb.log({'video': wandb.Video(filename, fps=4, format="gif")}) 
+        # also save a 3D interactive plot of the last frame
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.scatter(trajectory_points_for_fig[-2, :, 0], trajectory_points_for_fig[-2, :, 1], trajectory_points_for_fig[-2, :, 2], alpha=0.7, color="#67a9cf", label="Trajectory samples")
+        if perturbed_trajectories is not None:
+            ax.scatter(perturbed_trajectory_points_for_fig[-1, :, 0], perturbed_trajectory_points_for_fig[-1, :, 1], perturbed_trajectory_points_for_fig[-1, :, 2], alpha=0.7, color="#ef8a62", label="Perturbed Trajectory samples")
+        if cfg is not None:
+            expected_trajectory = trajectory_points_for_fig[-1, :, :3] + np.array(cfg.perturbations)[:3]
+            ax.scatter(expected_trajectory[:, 0], expected_trajectory[:, 1], expected_trajectory[:, 2], alpha=0.7, color="#f46d43", label="Expected Trajectory samples")
+        ax.legend(loc='upper right', fontsize='small')
+        plt.savefig(filename.replace('.gif', '.png'))
+        # save the figure to wandb
+        if cfg.log:
+            wandb.log({filename: wandb.Image(plt)})
+        plt.close(fig)
+
+
+
+    def create_trajectory_evolution(self, policy:BaseImagePolicy, cfg=None):
+        self.env.seed(cfg.seed)
+        # init fn
+        self.init_fn = lambda env, seed: init_fn(env, seed, enable_render=True)
+        # self.env.set_mode('test')
+        obs = self.env.reset()
+        done = False
+        policy.reset()
+        timestep = 0
+        observations = []
+        np_obs_dict = dict(obs)
+        obs_dict = dict_apply(np_obs_dict, lambda x: torch.from_numpy(x).to(policy.device))
+        obs_dict = dict_apply(obs_dict, lambda x: x.unsqueeze(0))
+        trajectories = policy.predict_action(obs_dict)['trajectories']
+        filename = '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/trajectory_evolution_3D.gif'
+        self.plot_trajectories(trajectories, filename)
+
     def undo_transform_action(self, action):
         raw_shape = action.shape
         if raw_shape[-1] == 20:
@@ -181,6 +259,33 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             uaction = uaction.reshape(*raw_shape[:-1], 14)
 
         return uaction
+
+
+    def run_dp_with_attack(self, policy:BaseImagePolicy, cfg=None):
+        print(f"Attacking after steps : {cfg.attack_after_timesteps}")
+        self.env.seed(cfg.seed)
+        # init fn
+        self.init_fn = lambda env, seed: init_fn(env, seed, enable_render=False)
+        # self.env.set_mode('test')
+        obs = self.env.reset()
+        done = False
+        policy.reset()
+        timestep = 0
+        observations = []
+        np_obs_dict = dict(obs)
+        obs_dict = dict_apply(np_obs_dict, lambda x: torch.from_numpy(x).to(policy.device))
+        obs_dict = dict_apply(obs_dict, lambda x: x.unsqueeze(0))
+        # apply attack for a single timestep and check the perturbation        
+        perturbed_obs_dict = policy.pgd_perturbed_obs(obs_dict, cfg)
+        # print(f"Difference between perturbed and clean observation: {torch.norm(perturbed_obs_dict['robot0_eye_in_hand_image'] - obs_dict['robot0_eye_in_hand_image'])}")
+        # get the trajectory for the perturbed observation
+        with torch.no_grad():
+            trajectories = policy.predict_action(obs_dict)['trajectories']
+            perturbed_trajectories = policy.predict_action(perturbed_obs_dict)['trajectories']
+            # print(f'Perturbed trajectories: {perturbed_trajectories[-1]}')
+            # print(f'Clean trajectories: {trajectories[-1]}')
+        filename = f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/diffusion_trajectory_evolution_perturbed_3D_{cfg.perturbations}_eps_{cfg.epsilon}.gif'
+        self.plot_trajectories(trajectories, filename, perturbed_trajectories, cfg)
 
 
     def run(self, policy:BaseImagePolicy, epsilon=0.1, cfg=None):

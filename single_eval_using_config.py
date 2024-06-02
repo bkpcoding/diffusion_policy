@@ -29,6 +29,15 @@ def main(cfg):
     dataset_path = cfg.dataset_path
     view = cfg.view
 
+    if cfg.log:
+        wandb.init(project="diffusion_experimentation")
+        wandb.log({"task": task, "attack": attack, "epsilon": cfg.epsilon, \
+            "eps_iter": cfg.eps_iter})
+        table = wandb.Table(columns=["Perturbations"])
+        print("Perturbations: ", cfg.perturbations)
+        for pertubation in cfg.perturbations:
+            table.add_data(pertubation)
+
 
     # the output directory should depend on the current directory and the checkpoint path and the attack type and epsilon
     output_dir = os.path.join(os.getcwd(), f"diffusion_policy/data/experiments/image/{task}/{algo}/eval_single")
@@ -68,7 +77,9 @@ def main(cfg):
     # else:
     #     runner_log = env_runner.run(policy)
     # env_runner.probability_of_action(policy, cfg)
-    env_runner.create_videos(policy, cfg, perturbation = -0.15)
+    # env_runner.create_videos(policy, cfg, perturbation = -0.15)
+    # env_runner.create_trajectory_evolution(policy, cfg)
+    env_runner.run_dp_with_attack(policy, cfg)
 
     # json_log = dict()
     # for key, value in runner_log.items():

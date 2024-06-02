@@ -29,6 +29,8 @@ def main(cfg):
     attack = cfg.attack
     log = cfg.log
     epsilons = cfg.epsilons
+    if cfg.epsilon is not None:
+        epsilons = [cfg.epsilon]
     dataset_path = cfg.dataset_path
     view = cfg.view
 
@@ -39,7 +41,7 @@ def main(cfg):
         # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-rand_target-{cfg.rand_target}-rand_init-{cfg.rand_int}')
         # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-target_perturbations-{cfg.target_perturbations}-pertubation-{cfg.perturbations[1]}')
         # wandb.init(project="BC_Evaluation", id='skjusrmy', resume='must')
-        wandb.init(project='diffusion_experimentation', name=f'diffusion_policy_{cfg.epsilons[0]}_steps_all')
+        wandb.init(project='diffusion_experimentation', name=f'diffusion_policy')
         config_path = 'diffusion_policy/eval_configs'
         config_name = 'diffusion_policy_image_ph_pick_pgd_adversarial'
         config_file_path = to_absolute_path(f"{config_path}/{config_name}.yaml")
@@ -47,7 +49,7 @@ def main(cfg):
         wandb.save(config_file_path)
 
     if cfg.attack_type == 'pgd':
-        eps_iters = cfg.eps_iter
+        eps_iters = [cfg.eps_iter] if type(cfg.eps_iter) == float else cfg.eps_iter
         for eps_iter in eps_iters:
             cfg.eps_iter = eps_iter
             for epsilon in epsilons:

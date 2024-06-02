@@ -3,6 +3,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import wandb
 from einops import rearrange, reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
@@ -190,6 +191,7 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
     
         # set step values
         scheduler.set_timesteps(self.num_inference_steps)
+        self.trajectories = []
 
         for t in scheduler.timesteps:
             # 1. apply conditioning
@@ -205,10 +207,10 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
                 generator=generator,
                 **kwargs
                 ).prev_sample
+            self.trajectories.append(trajectory)
         
         # finally make sure conditioning is enforced
         trajectory[condition_mask] = condition_data[condition_mask]
-        print(trajectory.shape, condition_mask)        
 
         return trajectory
 
@@ -220,7 +222,11 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         """
         assert 'past_action' not in obs_dict # not implemented yet
         # normalize input
+        # print(f"Minimum value of observation is {torch.min(obs_dict['robot0_eye_in_hand_image'])}")
+        # print(f"Maximum value of observation is {torch.max(obs_dict['robot0_eye_in_hand_image'])}")
         nobs = self.normalizer.normalize(obs_dict)
+        # print(f"Minimum value of observation is {torch.min(nobs['robot0_eye_in_hand_image'])}")
+        # print(f"Maximum value of observation is {torch.max(nobs['robot0_eye_in_hand_image'])}")
         value = next(iter(nobs.values()))
         B, To = value.shape[:2]
         T = self.horizon
@@ -274,9 +280,149 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         
         result = {
             'action': action,
-            'action_pred': action_pred
+            'action_pred': action_pred, 
+            'trajectories': self.trajectories,
         }
         return result
+
+    def pgd_perturbed_obs(self, obs_dict: Dict[str, torch.Tensor], cfg):
+        """
+        This function uses pgd attack to generate adversarial perturbations.
+        The main idea is to perturb the observation after certain timesteps when the 
+        samples are approaching the near equilibrium state. Otherwise we would be wasting
+        compute early on when the samples are far from equilibrium and approaching just means.
+        So say after 80 timesteps out of 100, we start perturbing the observations such that
+        we decrease the loss between the samples and the target samples from that timestep onwards.
+        We will accumulate this perturbed_obs over the timesteps and return it.
+        The main indication of the attack being successful is to have the loss go down over time
+        for each timestep.
+        """
+        assert 'past_action' not in obs_dict
+        # normalize input
+        nobs = self.normalizer.normalize(obs_dict)
+        value = next(iter(nobs.values()))
+        B, To = value.shape[:2]
+        T = self.horizon
+        Da = self.action_dim
+        Do = self.obs_feature_dim
+        To = self.n_obs_steps
+        model = self.model
+        scheduler = self.noise_scheduler
+        device = self.device
+        dtype = self.dtype
+        if self.obs_as_global_cond:
+            # empty data for action
+            cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
+            cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
+        else:
+            # empty data for action
+            cond_data = torch.zeros(size=(B, T, Da+Do), device=device, dtype=dtype)
+            cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
+            cond_data[:,:To,Da:] = torch.zeros(size=(B, To, Do), device=device, dtype=dtype)
+            cond_mask[:,:To,Da:] = True
+        trajectory = torch.randn(
+                size=cond_data.shape, 
+                dtype=cond_data.dtype,
+                device=cond_data.device,)
+        nobs_perturbed = nobs.copy()
+        nobs_perturbed = dict_apply(nobs_perturbed, lambda x: x.requires_grad_(True))
+        
+        # set step values
+        scheduler.set_timesteps(self.num_inference_steps)
+        self.trajectories = []
+        global_cond = None
+        local_cond = None
+        prev_trajectory = None
+        for t in scheduler.timesteps:
+            prev_trajectory = trajectory.detach().clone()
+            # handle different ways of passing observation
+            if self.obs_as_global_cond:
+                # condition through global feature
+                this_nobs = dict_apply(nobs_perturbed, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+                nobs_features = self.obs_encoder(this_nobs)
+                # reshape back to B, Do
+                global_cond = nobs_features.reshape(B, -1)
+            else:
+                # condition through impainting
+                this_nobs = dict_apply(nobs_perturbed, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+                nobs_features = self.obs_encoder(this_nobs)
+                # reshape back to B, To, Do
+                nobs_features = nobs_features.reshape(B, To, -1)
+
+            # 1. apply conditioning
+            trajectory[cond_mask] = cond_data[cond_mask]
+            # 2. predict model output
+            with torch.no_grad():
+                model_output = model(trajectory, t,
+                    local_cond=local_cond, global_cond=global_cond)
+                # 3. compute previous image: x_t -> x_t-1
+                trajectory = scheduler.step(
+                    model_output, t, trajectory,
+                    **self.kwargs
+                ).prev_sample
+            # if t is less than than 1 - cfg.attack_after_timesteps * self.num_inference_steps then
+            # perturb the observation
+            if t < (1 - cfg.attack_after_timesteps) * self.num_inference_steps:
+                target_trajectory = trajectory.detach() + torch.tensor(cfg.perturbations, device=trajectory.device).unsqueeze(0)
+                for j in range(cfg.num_iter):
+                    predicted_trajectory = prev_trajectory.detach().clone()
+                    prev_obs = nobs_perturbed.copy()
+                    nobs_perturbed = dict_apply(nobs_perturbed, lambda x: x.clone().detach().requires_grad_(True))
+                    model.zero_grad()
+                    
+                    if self.obs_as_global_cond:
+                        # condition through global feature
+                        this_nobs = dict_apply(nobs_perturbed, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+                        nobs_features = self.obs_encoder(this_nobs)
+                        # reshape back to B, Do
+                        global_cond = nobs_features.reshape(B, -1)
+                    else:
+                        # condition through impainting
+                        this_nobs = dict_apply(nobs_perturbed, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+                        nobs_features = self.obs_encoder(this_nobs)
+                        # reshape back to B, To, Do
+                        nobs_features = nobs_features.reshape(B, To, -1)
+                    
+                    # 1. apply conditioning
+                    predicted_trajectory[cond_mask] = cond_data[cond_mask]
+                    # 2. predict model output
+                    model_output = model(predicted_trajectory, t, local_cond=local_cond, global_cond=global_cond)
+                    # 3. compute previous image: x_t -> x_t-1
+                    predicted_trajectory = scheduler.step(
+                        model_output, t, predicted_trajectory,
+                        **self.kwargs
+                    ).prev_sample
+                    
+                    # compute loss
+                    mse_loss = torch.nn.MSELoss()
+                    loss = mse_loss(predicted_trajectory, target_trajectory)
+                    loss = loss.mean()
+                    # we need to decrease the loss
+                    loss = -loss
+                    
+                    # compute gradients
+                    # print(f"Loss at timestep {t} and iteration {j} is {loss}")
+                    if cfg.log:
+                        wandb.log({f"loss": loss})
+                    loss.backward()
+                    
+                    # update the observation
+                    assert nobs_perturbed[cfg.view].grad is not None
+                    nobs_perturbed[cfg.view] = nobs_perturbed[cfg.view] + cfg.eps_iter * torch.sign(nobs_perturbed[cfg.view].grad)
+                    perturbation = nobs_perturbed[cfg.view] - prev_obs[cfg.view]
+                    # clip the perturbation
+                    perturbation = torch.clamp(perturbation, -cfg.epsilon, cfg.epsilon)
+                    nobs_perturbed[cfg.view] = prev_obs[cfg.view] + perturbation
+                    # clamp the observation to be within the range
+                    nobs_perturbed[cfg.view] = torch.clamp(nobs_perturbed[cfg.view], cfg.clip_min, cfg.clip_max)
+                    
+                    # clear the gradients
+                    if nobs_perturbed[cfg.view].grad is not None:
+                        nobs_perturbed[cfg.view].grad.zero_()      
+        # unnormalize the observation
+        nobs_perturbed = self.normalizer.unnormalize(nobs_perturbed)      
+        return nobs_perturbed
+
 
     # ========= training  ============
     def set_normalizer(self, normalizer: LinearNormalizer):
