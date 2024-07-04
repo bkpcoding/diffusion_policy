@@ -20,9 +20,14 @@ keypoint_visible_rate: 1.0
 
 checkpoint: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_2/checkpoints/epoch=0300-test_mean_score=1.000.ckpt'
 view: 'robot0_eye_in_hand_image'
-eps_iter: 0.01
+eps_iter: 0.05
 eps: 0.125
-perturbations: [0, 0.1, 0.1, 0, 0, 0, 0]
+perturbations: [0.15, 0.15, 0, 0, 0, 0, 0]
+n_iter: 10
+clip_min: 0
+clip_max: 1
+patch_size: 24
+log: False
 
 policy:
   _target_: diffusion_policy.policy.robomimic_image_policy.RobomimicImagePolicy
@@ -35,7 +40,7 @@ policy:
   crop_shape: [76,76]
 
 dataloader:
-  batch_size: 64
+  batch_size: 1
   num_workers: 10
   shuffle: True
   pin_memory: True
@@ -54,7 +59,7 @@ training:
   debug: False
   resume: True
   # optimization
-  num_epochs: 600
+  num_epochs: 100
   # training loop control
   # in epochs
   rollout_every: 100

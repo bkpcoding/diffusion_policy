@@ -1,0 +1,82 @@
+defaults:
+  - _self_
+  - task: lift_image
+
+name: train_robomimic_image
+# _target_: diffusion_policy.workspace.train_robomimic_image_workspace.TrainRobomimicImageWorkspace
+_target_: diffusion_policy.workspace.train_robomimic_image_workspace.TrainRobomimicUniPertImageWorkspaceRNN
+checkpoint: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vanilla_bc/train_0/checkpoints/epoch=0500-test_mean_score=1.000.ckpt
+
+epsilon: 0.125
+epsilon_step: 0.001
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+view: "robot0_eye_in_hand_image"
+# view: 'agentview_image'
+clip_min: 0
+clip_max: 1
+horizon: &horizon 1
+n_obs_steps: 1
+n_action_steps: 1
+n_latency_steps: 0
+dataset_obs_steps: *horizon
+past_action_visible: False
+keypoint_visible_rate: 1.0
+targeted: False
+perturbations: [0.15, 0.15, 0, 0, 0, 0, 0]
+log: True
+
+policy:
+  _target_: diffusion_policy.policy.robomimic_image_policy.RobomimicImagePolicy
+  shape_meta: ${shape_meta}
+  algo_name: bc
+  obs_type: image
+  # oc.select resolver: key, default
+  task_name: ${oc.select:task.task_name,lift}
+  dataset_type: ${oc.select:task.dataset_type,ph}
+  crop_shape: [76,76]
+
+dataloader:
+  batch_size: 8
+  num_workers: 10
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 10
+  shuffle: False
+  pin_memory: True
+  persistent_workers: False
+
+training:
+  device: "cuda:0"
+  seed: 1023
+  debug: False
+  resume: True
+  # optimization
+  num_epochs: 50
+  # training loop control
+  # in epochs
+  rollout_every: 5
+  checkpoint_every: 100
+  val_every: 100
+  sample_every: 100
+  # steps per epoch
+  max_train_steps: null
+  max_val_steps: null
+  # misc
+  tqdm_interval_sec: 1.0
+
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}

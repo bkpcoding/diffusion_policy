@@ -32,7 +32,7 @@ env_runner:
   n_train: 2
   n_train_vis: 1
   train_start_idx: 0
-  n_test: 18
+  n_test: 50
   n_test_vis: 3
   test_start_seed: 100000
   # use python's eval function as resolver, single-quoted string as argument
@@ -45,7 +45,7 @@ env_runner:
   past_action: ${past_action_visible}
   abs_action: *abs_action
   tqdm_interval_sec: 1.0
-  n_envs: 20
+  n_envs: 26
 # evaluation at this config requires a 16 core 64GB instance.
 
 dataset:

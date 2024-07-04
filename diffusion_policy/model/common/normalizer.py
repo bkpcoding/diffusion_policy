@@ -20,7 +20,7 @@ class LinearNormalizer(DictOfTensorMixin):
         mode='limits',
         output_max=1.,
         output_min=-1.,
-        range_eps=1e-4,
+        range_eps=1e-8,
         fit_offset=True):
         if isinstance(data, dict):
             for key, value in data.items():

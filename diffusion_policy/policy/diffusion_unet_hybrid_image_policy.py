@@ -244,6 +244,7 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         if self.obs_as_global_cond:
             # condition through global feature
             this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+            this_nobs = dict_apply(this_nobs, lambda x: x.to(device))
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
             global_cond = nobs_features.reshape(B, -1)
@@ -298,8 +299,21 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         for each timestep.
         """
         assert 'past_action' not in obs_dict
+        view = cfg.view
+        if view == 'both':
+            views = ['agentview_image', 'robot0_eye_in_hand_image']                
+        elif isinstance(view, list):
+            views = view
+        elif isinstance(view, str):
+            views = [view]
+        else:
+            raise ValueError("view must be a string or a list of strings")
         # normalize input
+        # print(f"Minimum value of observation is {torch.min(obs_dict['robot0_eye_in_hand_image'])}")
+        # print(f"Maximum value of observation is {torch.max(obs_dict['robot0_eye_in_hand_image'])}")
         nobs = self.normalizer.normalize(obs_dict)
+        # print(f"Minimum value of observation is {torch.min(nobs['robot0_eye_in_hand_image'])}")
+        # print(f"Maximum value of observation is {torch.max(nobs['robot0_eye_in_hand_image'])}")
         value = next(iter(nobs.values()))
         B, To = value.shape[:2]
         T = self.horizon
@@ -333,28 +347,31 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         global_cond = None
         local_cond = None
         prev_trajectory = None
+        if self.obs_as_global_cond:
+            # condition through global feature
+            this_nobs_pure = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+            with torch.no_grad():
+                nobs_features_pure = self.obs_encoder(this_nobs_pure)
+            # reshape back to B, Do
+            global_cond_pure = nobs_features_pure.reshape(B, -1)
+        else:
+            # condition through impainting
+            this_nobs_pure = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+            with torch.no_grad():
+                nobs_features_pure = self.obs_encoder(this_nobs_pure)
+            # reshape back to B, To, Do
+            nobs_features_pure = nobs_features_pure.reshape(B, To, -1)
+
+
         for t in scheduler.timesteps:
             prev_trajectory = trajectory.detach().clone()
             # handle different ways of passing observation
-            if self.obs_as_global_cond:
-                # condition through global feature
-                this_nobs = dict_apply(nobs_perturbed, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
-                nobs_features = self.obs_encoder(this_nobs)
-                # reshape back to B, Do
-                global_cond = nobs_features.reshape(B, -1)
-            else:
-                # condition through impainting
-                this_nobs = dict_apply(nobs_perturbed, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
-                nobs_features = self.obs_encoder(this_nobs)
-                # reshape back to B, To, Do
-                nobs_features = nobs_features.reshape(B, To, -1)
-
             # 1. apply conditioning
             trajectory[cond_mask] = cond_data[cond_mask]
             # 2. predict model output
             with torch.no_grad():
                 model_output = model(trajectory, t,
-                    local_cond=local_cond, global_cond=global_cond)
+                    local_cond=local_cond, global_cond=global_cond_pure)
                 # 3. compute previous image: x_t -> x_t-1
                 trajectory = scheduler.step(
                     model_output, t, trajectory,
@@ -362,11 +379,11 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
                 ).prev_sample
             # if t is less than than 1 - cfg.attack_after_timesteps * self.num_inference_steps then
             # perturb the observation
+            prev_obs = nobs.copy()
             if t < (1 - cfg.attack_after_timesteps) * self.num_inference_steps:
                 target_trajectory = trajectory.detach() + torch.tensor(cfg.perturbations, device=trajectory.device).unsqueeze(0)
                 for j in range(cfg.num_iter):
                     predicted_trajectory = prev_trajectory.detach().clone()
-                    prev_obs = nobs_perturbed.copy()
                     nobs_perturbed = dict_apply(nobs_perturbed, lambda x: x.clone().detach().requires_grad_(True))
                     model.zero_grad()
                     
@@ -399,28 +416,50 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
                     loss = loss.mean()
                     # we need to decrease the loss
                     loss = -loss
+                    # euclidean distance from the predicted trajectory and the original trajectory
+                    euc_dist = torch.norm(predicted_trajectory - trajectory, p=2)
+                    l1_dist = torch.norm(predicted_trajectory - trajectory, p=1)
                     
                     # compute gradients
                     # print(f"Loss at timestep {t} and iteration {j} is {loss}")
                     if cfg.log:
-                        wandb.log({f"loss": loss})
+                        wandb.log({f"loss": loss.item(), f"euc_dist": euc_dist.item(), f"l1_dist": l1_dist.item()})
                     loss.backward()
                     
-                    # update the observation
-                    assert nobs_perturbed[cfg.view].grad is not None
-                    nobs_perturbed[cfg.view] = nobs_perturbed[cfg.view] + cfg.eps_iter * torch.sign(nobs_perturbed[cfg.view].grad)
-                    perturbation = nobs_perturbed[cfg.view] - prev_obs[cfg.view]
-                    # clip the perturbation
-                    perturbation = torch.clamp(perturbation, -cfg.epsilon, cfg.epsilon)
-                    nobs_perturbed[cfg.view] = prev_obs[cfg.view] + perturbation
-                    # clamp the observation to be within the range
-                    nobs_perturbed[cfg.view] = torch.clamp(nobs_perturbed[cfg.view], cfg.clip_min, cfg.clip_max)
-                    
-                    # clear the gradients
-                    if nobs_perturbed[cfg.view].grad is not None:
-                        nobs_perturbed[cfg.view].grad.zero_()      
+                    for view in views:
+                        # update the observation
+                        assert nobs_perturbed[view].grad is not None
+                        nobs_perturbed[view] = nobs_perturbed[view] + cfg.eps_iter * torch.sign(nobs_perturbed[view].grad)
+                        perturbation = nobs_perturbed[view] - prev_obs[view]
+                        # clip the perturbation
+                        perturbation = torch.clamp(perturbation, -cfg.epsilon, cfg.epsilon)
+                        nobs_perturbed[view] = prev_obs[view] + perturbation
+                        # clamp the observation to be within the range
+                        nobs_perturbed[view] = torch.clamp(nobs_perturbed[view], cfg.clip_min, cfg.clip_max)
+                        # clear the gradients
+                        if nobs_perturbed[view].grad is not None:
+                            nobs_perturbed[view].grad.zero_()
         # unnormalize the observation
+        # print(f"Minimum value of observation is {torch.min(nobs_perturbed['robot0_eye_in_hand_image'])}")
+        # print(f"Maximum value of observation is {torch.max(nobs_perturbed['robot0_eye_in_hand_image'])}")
+        # print(f"Linf norm before unnormalization of perturbation is {torch.max(torch.abs(nobs_perturbed['robot0_eye_in_hand_image'] - prev_obs['robot0_eye_in_hand_image']))}")
+        # get the index of the minimum value of the observation
+        # nobs_perturbed_flattend = nobs_perturbed['robot0_eye_in_hand_image'].flatten()
+        # prev_obs_flattend = prev_obs['robot0_eye_in_hand_image'].flatten()
+        # perturbation = torch.abs(nobs_perturbed['robot0_eye_in_hand_image'].flatten() - prev_obs['robot0_eye_in_hand_image'].flatten())
+        # ind_max = torch.argmax(perturbation)
+        # print(f"The nobs and prev obs values at the index of maximum perturbation are {nobs_perturbed_flattend[ind_max]} and {prev_obs_flattend[ind_max]}")
         nobs_perturbed = self.normalizer.unnormalize(nobs_perturbed)      
+        # nobs_perturbed_flattend = nobs_perturbed['robot0_eye_in_hand_image'].flatten()
+        # obs_dict_flattend = obs_dict['robot0_eye_in_hand_image'].flatten()
+        # print(f"The nobs and obs values at the index of maximum perturbation are {nobs_perturbed_flattend[ind_max]} and {obs_dict_flattend[ind_max]}")
+        # # print(f"Minimum value of observation is {torch.min(nobs_perturbed['robot0_eye_in_hand_image'])}")
+        # # print(f"Maximum value of observation is {torch.max(nobs_perturbed['robot0_eye_in_hand_image'])}")
+        # print(f"Linf norm after unnormalization of perturbation is {torch.max(torch.abs(nobs_perturbed['robot0_eye_in_hand_image'] - obs_dict['robot0_eye_in_hand_image']))}")
+        # nobs_perturbed = self.normalizer.normalize(nobs_perturbed)
+        # print(f"Linf norm of perturbation after normalization is {torch.max(torch.abs(nobs_perturbed['robot0_eye_in_hand_image'] - prev_obs['robot0_eye_in_hand_image']))}")
+        # nobs_perturbed = self.normalizer.unnormalize(nobs_perturbed)
+        # print(f"Linf norm of perturbation after unnormalization is {torch.max(torch.abs(nobs_perturbed['robot0_eye_in_hand_image'] - obs_dict['robot0_eye_in_hand_image']))}")
         return nobs_perturbed
 
 
@@ -433,6 +472,7 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         assert 'valid_mask' not in batch
         nobs = self.normalizer.normalize(batch['obs'])
         nactions = self.normalizer['action'].normalize(batch['action'])
+        nactions = nactions.to(self.device)
         batch_size = nactions.shape[0]
         horizon = nactions.shape[1]
 
@@ -445,6 +485,7 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, 
                 lambda x: x[:,:self.n_obs_steps,...].reshape(-1,*x.shape[2:]))
+            this_nobs = dict_apply(this_nobs, lambda x: x.to(self.device))
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
             global_cond = nobs_features.reshape(batch_size, -1)
@@ -472,7 +513,6 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         # (this is the forward diffusion process)
         noisy_trajectory = self.noise_scheduler.add_noise(
             trajectory, noise, timesteps)
-        
         # compute loss mask
         loss_mask = ~condition_mask
 

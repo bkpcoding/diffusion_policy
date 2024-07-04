@@ -4,6 +4,7 @@ import torch.nn as nn
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.common.pytorch_util import dict_apply
+import wandb
 
 from robomimic.algo import algo_factory
 from robomimic.algo.algo import PolicyAlgo
@@ -96,6 +97,7 @@ class RobomimicImagePolicy(BaseImagePolicy):
     def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         nobs_dict = self.normalizer(obs_dict)
         robomimic_obs_dict = dict_apply(nobs_dict, lambda x: x[:,0,...])
+        robomimic_obs_dict = dict_apply(robomimic_obs_dict, lambda x: x.to(self.model.device))
         naction = self.model.get_action(robomimic_obs_dict)
         action = self.normalizer['action'].unnormalize(naction)
         # (B, Da)
@@ -107,6 +109,7 @@ class RobomimicImagePolicy(BaseImagePolicy):
     def action_dist(self, obs_dict: Dict[str, torch.Tensor]):
         nobs_dict = self.normalizer(obs_dict)
         robomimic_obs_dict = dict_apply(nobs_dict, lambda x: x[:,0,...])
+        robomimic_obs_dict = dict_apply(robomimic_obs_dict, lambda x: x.to(self.model.device))
         action_dist = self.model.get_action_dist(robomimic_obs_dict)
         return action_dist
 
@@ -138,41 +141,66 @@ class RobomimicImagePolicy(BaseImagePolicy):
     def get_optimizer(self):
         return self.model.optimizers['policy']
 
-    def train_adv_patch(self, batch, adv_patch, mask, cfg):
+    def train_adv_patch(self, batch, adv_patch, mask, cfg, epoch = None):
         """
         Train the adversarial patch on the batch of data
         Based on paper: https://arxiv.org/pdf/1610.08401
         For each image in the batch, try to perturb the image according to 
         the perturbation specified in the config
-        """
+            """
         # turn the adversarial patch into a parameter
         adv_patch = adv_patch.unsqueeze(0).to(self.model.device)
+        mask = mask.to(self.model.device)
+        clean_obs_dict = batch['obs']
 
-        obs_dict = batch['obs']
-        perturbed_view = obs_dict[cfg.view]* (1 - mask) + adv_patch * mask
-        # clamp the perturbed_obs to be within the range of the original image
-        perturbed_view = torch.clamp(perturbed_view, 0, 1)
-        obs_dict[cfg.view] = perturbed_view
-        perturbed_obs_dict = dict_apply(obs_dict, lambda x: x.clone().detach().requires_grad_(True))
+        with torch.no_grad():
+            clean_action_dist = self.action_dist(clean_obs_dict)
+            clean_action_means = clean_action_dist.component_distribution.base_dist.loc
+            target_means = clean_action_means.clone().detach() + torch.tensor(cfg.perturbations).unsqueeze(0).to(self.model.device)
 
         # nactions = self.normalizer['action'].normalize(batch['action'])
         actions = batch['action']
         self.model.reset()
-        # get the predicted action for the perturbed observation
-        with torch.no_grad():
-            action_dist = self.action_dist(perturbed_obs_dict)
-            action_means = action_dist.component_distribution.base_dist.loc
-        predicted_action_dist = self.action_dist(perturbed_obs_dict)
-        predicted_means = predicted_action_dist.component_distribution.base_dist.loc
-        # calculate the loss
-        loss = nn.MSELoss()(predicted_means, action_means)
-        # since we are doing a targeted attack, we want to minimize the loss
-        loss.backward()
-        # perturb the observation with the gradient according to FGSM
-        grad = torch.sign(perturbed_obs_dict[cfg.view].grad)
-        grad = grad * mask
-        grad = torch.sum(grad, dim=0)
-        adv_patch = adv_patch + cfg.eps_iter * grad
+        mse_loss = nn.MSELoss()
+        for i in range(cfg.n_iter):
+            perturbed_view = None
+            obs_dict = {k: v.clone().detach() for k, v in clean_obs_dict.items()}  # Detach clean_obs_dict to prevent gradient tracking
+            perturbed_view = obs_dict[cfg.view] * (1 - mask) + adv_patch * mask
+            perturbed_view = torch.clamp(perturbed_view, 0, 1)
+            obs_dict[cfg.view] = perturbed_view.requires_grad_(True)  # Ensure gradients are tracked
+            
+            self.model.optimizers['policy'].zero_grad()
+            self.model.reset()
+            
+            # get the predicted action for the perturbed observation
+            predicted_action_dist = self.action_dist(obs_dict)
+            predicted_action_means = predicted_action_dist.component_distribution.base_dist.loc
+            
+            # calculate the loss
+            loss = mse_loss(predicted_action_means, target_means)
+            loss = -loss.mean()
+            # print(f"Loss: {loss.item()}")
+            if cfg.log:
+                wandb.log({f"loss_{epoch}": loss.item()})
+            
+            # since we are doing a targeted attack, we want to minimize the loss
+            loss.backward()
+            
+            # perturb the observation with the gradient according to FGSM
+            grad = torch.sign(obs_dict[cfg.view].grad)
+            grad = grad * mask
+            grad = torch.sum(grad, dim=0)
+            
+            adv_patch = adv_patch + cfg.eps_iter * grad
+            adv_patch = torch.clamp(adv_patch, -cfg.eps, cfg.eps)
+            adv_patch = adv_patch.detach()
+            loss = loss.detach()
+            mask = mask.detach()
+            # clear the gradients
+            obs_dict[cfg.view].grad.data.zero_()
+            obs_dict[cfg.view] = obs_dict[cfg.view].detach()
+
+
         # clip the adversarial patch to be within cfg.eps
         adv_patch = torch.clamp(adv_patch, -cfg.eps, cfg.eps).squeeze(0)
         return adv_patch, loss.item()

@@ -24,6 +24,8 @@ import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.obs_utils as ObsUtils
 import pickle
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation, ArtistAnimation
 
 def create_env(env_meta, shape_meta, enable_render=True):
     modality_mapping = collections.defaultdict(list)
@@ -291,19 +293,21 @@ class RobomimicImageRunner(BaseImageRunner):
                         device=device))
                 
                 if adversarial_patch is not None:
-                    obs_dict[cfg.view] = obs_dict[cfg.view] + adversarial_patch.unsqueeze(0).to(device)
+                    obs_dict[cfg.view] = obs_dict[cfg.view] + adversarial_patch.to(device)
                     obs_dict[cfg.view] = torch.clamp(obs_dict[cfg.view], cfg.clip_min, cfg.clip_max)
-
-
+                obs_dict = dict_apply(obs_dict, lambda x: x.to(device=device))
                 # run policy
                 with torch.no_grad():
                     action_dict = policy.predict_action(obs_dict)
 
                 # device_transfer
-                np_action_dict = dict_apply(action_dict,
-                    lambda x: x.detach().to('cpu').numpy())
+                try:
+                    np_action_dict = dict_apply(action_dict,
+                        lambda x: x.detach().to('cpu').numpy())
+                    action = np_action_dict['action']
+                except AttributeError:
+                    action = action_dict['action'].detach().to('cpu').numpy()
 
-                action = np_action_dict['action']
                 if not np.all(np.isfinite(action)):
                     print(action)
                     raise RuntimeError("Nan or Inf action")
@@ -386,7 +390,7 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
         super().__init__(*args, **kwargs)
 
     def apply_fgsm_attack(self, obs_dict, policy:BaseImagePolicy,\
-                    cfg):
+                    cfg, target_means=None):
         view = cfg.view
         clip_min = cfg.clip_min
         clip_max = cfg.clip_max
@@ -415,7 +419,7 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
             # action = action_dict['action']
             action_dist = policy.action_dist(obs_dict)
             means = action_dist.component_distribution.base_dist.loc
-        
+
         # predicted_action = policy.predict_action(obs_dict)['action']
         predicted_action_dist= policy.action_dist(obs_dict)
         # print("ACtion dist: ", action_dist)
@@ -424,12 +428,23 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
         # print(predicted_means, predicted_scales, means)
         # print(predicted_action.grad_fn, action.grad_fn)
         mse_loss = torch.nn.MSELoss()
-        loss = mse_loss(predicted_means, means)
-        loss.backward()
+        if target_means is None:
+            print("Target means is None")
+            loss = mse_loss(predicted_means, means)
+            loss.backward()
+        else:
+            loss = mse_loss(predicted_means, target_means)
+            loss = -loss
+            loss.backward()
+        if cfg.log:
+            wandb.log({"Loss": loss.item()})
         for view in views:
             # assert obs_dict_copy[view].grad_fn is not None, "Input tensor does not have a grad_fn"
             grad = torch.sign(obs_dict[view].grad)
-            obs_dict[view] = obs_dict[view] + self.epsilon * grad
+            if target_means is None:
+                obs_dict[view] = obs_dict[view] + optimize_linear(grad, self.epsilon, cfg.norm)
+            else:
+                obs_dict[view] = obs_dict[view] + optimize_linear(grad, cfg.eps_iter, cfg.norm)
             obs_dict[view] = torch.clamp(obs_dict[view], clip_min, clip_max)
         # obs_dict['agentview_image'].requires_grad = False
         return obs_dict
@@ -439,7 +454,7 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
         Apply projected gradient descent attack from Madry et al. (2017)
         """
         view = cfg.view
-        num_iter = cfg.num_iter
+        n_iter = cfg.n_iter
         clip_min = cfg.clip_min
         clip_max = cfg.clip_max
         eps_iter = cfg.eps_iter
@@ -460,13 +475,18 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
         if rand_int:
             # randomly initialize the perturbation from a uniform distribution within the epsilon bound
             for view in views:
-                perturbation = torch.FloatTensor(obs_dict[view].shape).uniform_(-self.epsilon, self.epsilon).to(obs_dict[view].device)
+                perturbation = torch.FloatTensor(obs_dict[view].shape).uniform_(-self.epsilon, self.epsilon).to(policy.device)
                 perturbation = torch.clamp(perturbation, -eps_iter, eps_iter)
                 perturbation = torch.clamp(obs_dict[view] + perturbation, clip_min, clip_max) - obs_dict[view]
                 adv_obs_dict[view] = obs_dict[view] + perturbation
-
-        for i in range(num_iter):
-            adv_obs_dict = self.apply_fgsm_attack(adv_obs_dict, policy, cfg, target_actions)
+        with torch.no_grad():
+            clean_action_dist = policy.action_dist(obs_dict)
+            clean_action_means = clean_action_dist.component_distribution.base_dist.loc
+            target_means = clean_action_means.clone().detach() + torch.tensor(cfg.perturbations).unsqueeze(0).to(policy.device)
+        adv_obs_dict = obs_dict.copy()
+        for i in range(n_iter):
+            policy.zero_grad()
+            adv_obs_dict = self.apply_fgsm_attack(adv_obs_dict, policy, cfg, target_means)
             for view in views:
                 perturbation = adv_obs_dict[view] - obs_dict[view]
                 if norm == 'l2':
@@ -605,12 +625,12 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
                 obs, reward, done, info = env.step(env_action)
                 done = np.all(done)
                 past_action = action
-                if cfg.log == True:
+                # if cfg.log == True:
                     # log the perturbation for each environment separately
                     # for i in range(len(perturbation_norm)):
                     #     wandb.log({f'perturbation_{view}_{i}': perturbation_norm[i]})
-                    for i in range(len(perturbation_max)):
-                        wandb.log({f'max_perturbation_{view}_{i}': perturbation_max[i]})
+                    # for i in range(len(perturbation_max)):
+                    #     wandb.log({f'max_perturbation_{view}_{i}': perturbation_max[i]})
                 # update pbar
                 pbar.update(action.shape[1])
             pbar.close()
@@ -1393,9 +1413,12 @@ class AdversarialRobomimicImageRunnerDP(RobomimicImageRunner):
         elif isinstance(cfg.view, str):
             views = [cfg.view]
 
+        # self.observations = []
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
+        perturbed_agentview_images = []
+        perturbed_robot0_eye_in_hand_images = []
 
         for chunk_idx in range(n_chunks):
             start = chunk_idx * n_envs
@@ -1438,9 +1461,10 @@ class AdversarialRobomimicImageRunnerDP(RobomimicImageRunner):
                 obs_dict = dict_apply(np_obs_dict, 
                     lambda x: torch.from_numpy(x).to(
                         device=device))
+                # self.observations.append(obs_dict)
                 # print(type(obs_dict), obs_dict['agentview_image'].shape)
-
                 # apply attack
+                prev_obs_dict = obs_dict.copy()
                 if cfg.attack_type == 'fgsm':
                     obs_dict = self.apply_fgsm_attack(obs_dict, policy, cfg)
                 elif cfg.attack_type == 'pgd':
@@ -1452,6 +1476,15 @@ class AdversarialRobomimicImageRunnerDP(RobomimicImageRunner):
                 else:
                     raise ValueError("Invalid attack type")
                 self.step += 1
+                # calculate the linf and l2 norm of the perturbation
+                for view in views:
+                    perturbation = abs(obs_dict[view] - prev_obs_dict[view])
+                    if cfg.log:
+                        wandb.log({f'perturbation_{view}_l2': torch.norm(perturbation, p=2), \
+                                    f'perturbation_{view}_linf': torch.norm(perturbation, p=float('inf'))})
+                    # print(f"Norm of perturbation_{view}: ", torch.norm(perturbation, p=2), torch.norm(perturbation, p=float('inf')))
+                perturbed_agentview_images.append(obs_dict['agentview_image'][1][1])
+                perturbed_robot0_eye_in_hand_images.append(obs_dict['robot0_eye_in_hand_image'][1][1])
                 with torch.no_grad():
                     action = policy.predict_action(obs_dict)['action']
                 # device transfer
@@ -1466,12 +1499,50 @@ class AdversarialRobomimicImageRunnerDP(RobomimicImageRunner):
 
                 # update pbar
                 pbar.update(action.shape[1])
+            # collect data for this round
+            all_video_paths[this_global_slice] = env.render()[this_local_slice]
+            all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
             pbar.close()
+            # log the 
+
+
+        def visualize(observations1, observations2, file_name, every_frame=2):
+            # only get alternate frames to reduce the processing time
+            print(f"Shape of observations1: {observations1[0].shape}")
+            print(f"Shape of observations2: {observations2[0].shape}")
+            observations1 = observations1[::every_frame]
+            observations2 = observations2[::every_frame]
+            im = []
+            for i in range(len(observations1)):
+                agentview_image1 = observations1[i].cpu().detach().numpy()
+                agentview_image1 = np.transpose(agentview_image1, (1, 2, 0))
+                
+                agentview_image2 = observations2[i].cpu().detach().numpy()
+                agentview_image2 = np.transpose(agentview_image2, (1, 2, 0))
+                
+                combined_image = np.hstack((agentview_image1, agentview_image2))
+                im.append(combined_image)
+
+            fig, ax = plt.subplots()
+            ims = []
+            for i in range(len(im)):
+                im_obj = ax.imshow(im[i], animated=True)
+                ims.append([im_obj])
+                ax.axis('off')
+
+            ani = ArtistAnimation(fig, ims, interval=100, blit=True)
+            ani.save(file_name, writer='pillow', fps=10)
+        
+        # visualize the perturbed images
+        filename = "/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/diffusion_policy_perturbations/pgd_perturbations.gif"
+        visualize(perturbed_agentview_images, perturbed_robot0_eye_in_hand_images, filename, every_frame=2)
+
 
         # clear out video buffer
         _ = env.reset()
         max_rewards = collections.defaultdict(list)
         log_data = dict()
+        print("All rewards: ", all_rewards)
         for i in range(n_inits):
             seed = self.env_seeds[i]
             prefix = self.env_prefixs[i]
@@ -1490,6 +1561,221 @@ class AdversarialRobomimicImageRunnerDP(RobomimicImageRunner):
             name = prefix+'mean_score'
             value = np.mean(value)
             log_data[name] = value
+        # save the observation dicts as a pickle file
+        # pickle.dump(self.observations, open(f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/pkl_files/diffusion_policy_observed_dicts.pkl", "wb"))
         return log_data
 
             
+
+class AdversarialRobomimicImageRunnerBET(RobomimicImageRunner):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        """
+        The runner class for the adversarial attacks on the BET Policy
+        """
+
+    def apply_fgsm_attack(self, obs_dict, policy:BaseImagePolicy, cfg):
+        """
+        Applies the FGSM attack to the input image 
+        """
+        view = cfg.view
+        if view == 'both':
+            views = ['agentview_image', 'robot0_eye_in_hand_image']
+        elif isinstance(view, list):
+            views = view
+        elif isinstance(view, str):
+            views = [view]
+        else:
+            raise ValueError("view must be a string or a list of strings")
+        # create a copy of the original dict that requires grad for backward pass
+        obs_dict = dict_apply(obs_dict, lambda x: x.clone().detach().requires_grad_(True))
+        policy.zero_grad()
+        with torch.no_grad():
+            predicted_action = policy.predict_action(obs_dict)['action']
+        batch = {}
+        batch['obs'] = obs_dict
+        batch['action'] = predicted_action
+        loss, _ = policy.compute_loss(batch)
+        loss = -loss
+        loss.backward()
+        for view in views:
+            grad = torch.sign(obs_dict[view].grad)
+            if cfg.eps_iter != 'None':
+                obs_dict[view] = obs_dict[view] + cfg.eps_iter * grad
+            else:
+                obs_dict[view] = obs_dict[view] + cfg.epsilon * grad
+            obs_dict[view] = torch.clamp(obs_dict[view], cfg.clip_min, cfg.clip_max)
+            if obs_dict[view].grad is not None:
+                obs_dict[view].grad.zero_()
+        return obs_dict
+
+
+    def apply_pgd_attack(self, obs_dict, policy:BaseImagePolicy, cfg):
+        """
+        Apply projected gradient descent attack from Madry et al. (2017)
+        """
+        view = cfg.view
+        if view == 'both':
+            views = ['agentview_image', 'robot0_eye_in_hand_image']
+        elif isinstance(view, list):
+            views = view
+        elif isinstance(view, str):
+            views = [view]
+        else:
+            raise ValueError("view must be a string or a list of strings")
+        num_iter = cfg.num_iter
+        clip_min = cfg.clip_min
+        clip_max = cfg.clip_max
+        norm = cfg.norm
+
+        adv_obs_dict = obs_dict.copy()
+        with torch.no_grad():
+            predicted_action = policy.predict_action(obs_dict)['action']
+        for i in range(num_iter):
+            policy.zero_grad()
+            adv_obs_dict = self.apply_fgsm_attack(adv_obs_dict, policy, cfg)
+            for view in views:
+                perturbation = adv_obs_dict[view] - obs_dict[view]
+                if norm == 'l2':
+                    perturbation = perturbation * self.epsilon / torch.norm(perturbation, p=2)
+                elif norm == 'linf':
+                    perturbation = torch.clamp(perturbation, -self.epsilon, self.epsilon)
+                adv_obs_dict[view] = obs_dict[view] + perturbation
+                adv_obs_dict[view] = torch.clamp(adv_obs_dict[view], clip_min, clip_max)
+        return adv_obs_dict
+    
+    def run(self, policy: BaseImagePolicy, epsilon: float, cfg):
+        self.epsilon = epsilon
+        device = policy.device
+        dtype = policy.dtype
+        env = self.env
+        
+        # plan for rollout
+        n_envs = len(self.env_fns)
+        n_inits = len(self.env_init_fn_dills)
+        n_chunks = math.ceil(n_inits / n_envs)
+        if cfg.view == 'both':
+            views = ['agentview_image', 'robot0_eye_in_hand_image']
+        elif isinstance(cfg.view, list):
+            views = cfg.view
+        elif isinstance(cfg.view, str):
+            views = [cfg.view]
+
+        # self.observations = []
+        # allocate data
+        all_video_paths = [None] * n_inits
+        all_rewards = [None] * n_inits
+        perturbed_agentview_images = []
+        perturbed_robot0_eye_in_hand_images = []
+
+        for chunk_idx in range(n_chunks):
+            start = chunk_idx * n_envs
+            end = min(n_inits, start + n_envs)
+            this_global_slice = slice(start, end)
+            this_n_active_envs = end - start
+            this_local_slice = slice(0,this_n_active_envs)
+            
+            this_init_fns = self.env_init_fn_dills[this_global_slice]
+            n_diff = n_envs - len(this_init_fns)
+            if n_diff > 0:
+                this_init_fns.extend([self.env_init_fn_dills[0]]*n_diff)
+            assert len(this_init_fns) == n_envs
+
+            # init envs
+            env.call_each('run_dill_function', 
+                args_list=[(x,) for x in this_init_fns])
+
+            # start rollout
+            obs = env.reset()
+            past_action = None
+            policy.reset()
+
+            env_name = self.env_meta['env_name']
+            pbar = tqdm.tqdm(total=self.max_steps, desc=f"Eval {env_name}Image {chunk_idx+1}/{n_chunks}", 
+                leave=False, mininterval=self.tqdm_interval_sec)
+            
+            done = False
+            self.step = 0
+            while not done:
+                # create obs dict
+                np_obs_dict = dict(obs)
+                if self.past_action and (past_action is not None):
+                    # TODO: not tested
+                    np_obs_dict['past_action'] = past_action[
+                        :,-(self.n_obs_steps-1):].astype(np.float32)
+                
+                # device transfer
+                obs_dict = dict_apply(np_obs_dict, 
+                    lambda x: torch.from_numpy(x).to(
+                        device=device))
+                # self.observations.append(obs_dict)
+                # print(type(obs_dict), obs_dict['agentview_image'].shape)
+                # apply attack
+                prev_obs_dict = obs_dict.copy()
+                if cfg.attack_type == 'fgsm':
+                    obs_dict = self.apply_fgsm_attack(obs_dict, policy, cfg)
+                elif cfg.attack_type == 'pgd':
+                    obs_dict = self.apply_pgd_attack(obs_dict, policy, cfg)
+                elif cfg.attack_type == 'noise':
+                    obs_dict = self.apply_noise_attack(obs_dict, policy, cfg)
+                elif cfg.attack_type == None:
+                    pass
+                else:
+                    raise ValueError("Invalid attack type")
+                self.step += 1
+                # calculate the linf and l2 norm of the perturbation
+                for view in views:
+                    perturbation = abs(obs_dict[view] - prev_obs_dict[view])
+                    if cfg.log:
+                        wandb.log({f'perturbation_{view}_l2': torch.norm(perturbation, p=2), \
+                                    f'perturbation_{view}_linf': torch.norm(perturbation, p=float('inf'))})
+                    # print(f"Norm of perturbation_{view}: ", torch.norm(perturbation, p=2), torch.norm(perturbation, p=float('inf')))
+                # perturbed_agentview_images.append(obs_dict['agentview_image'][1][0])
+                # perturbed_robot0_eye_in_hand_images.append(obs_dict['robot0_eye_in_hand_image'][1][1])
+                with torch.no_grad():
+                    action = policy.predict_action(obs_dict)['action']
+                # device transfer
+                np_action = action.detach().to('cpu').numpy()
+                # step env
+                env_action = np_action
+                if self.abs_action:
+                    env_action = self.undo_transform_action(np_action)
+                obs, reward, done, info = env.step(env_action)
+                done = np.all(done)
+                past_action = np_action
+
+                # update pbar
+                pbar.update(action.shape[1])
+            # collect data for this round
+            all_video_paths[this_global_slice] = env.render()[this_local_slice]
+            all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
+            pbar.close()
+
+        # clear out video buffer
+        _ = env.reset()
+        
+        # log
+        max_rewards = collections.defaultdict(list)
+        log_data = dict()
+
+        for i in range(n_inits):
+                seed = self.env_seeds[i]
+                prefix = self.env_prefixs[i]
+                max_reward = np.max(all_rewards[i])
+                max_rewards[prefix].append(max_reward)
+                log_data[prefix+f'sim_max_reward_{seed}'] = max_reward
+
+                # visualize sim
+                video_path = all_video_paths[i]
+                if video_path is not None:
+                    sim_video = wandb.Video(video_path)
+                    log_data[prefix+f'sim_video_{seed}'] = sim_video
+            
+        # log aggregate metrics
+        for prefix, value in max_rewards.items():
+            name = prefix+'mean_score'
+            value = np.mean(value)
+            log_data[name] = value
+
+        return log_data
+

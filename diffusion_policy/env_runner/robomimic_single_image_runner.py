@@ -27,6 +27,10 @@ import pickle
 import matplotlib.pyplot as plt
 from matplotlib import animation
 from matplotlib.animation import PillowWriter
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.animation as animation
+import plotly.graph_objects as go
+
 
 
 def create_env(env_meta, shape_meta, enable_render=True):
@@ -135,13 +139,19 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             observations.append(obs_dict['agentview_image'].squeeze(0).detach().cpu().numpy())
             with torch.no_grad():
                 action_dict = policy.predict_action(obs_dict)
-            np_action_dict = dict_apply(action_dict,
-                lambda x: x.detach().to('cpu').numpy())
-            action = np_action_dict['action'].squeeze(0)
+            try:
+                np_action_dict = dict_apply(action_dict,
+                    lambda x: x.detach().to('cpu').numpy())
+                action = np_action_dict['action'].squeeze(0)
+            except:
+                print(type(action_dict['action']), action_dict['action'].shape)
+                action = action_dict['action'].squeeze(0).detach().cpu().numpy()
             if perturbation is not None:
-                action_perturbation = np.array([0, perturbation, perturbation, 0, 0, 0, 0, 0, 0, 0])
-                # action_perturbation = np.array([0, perturbation, 0, 0, 0, 0, 0]).reshape(action.shape)
+                print(f"Action before perturbation: {action}")
+                action_perturbation = np.array([0, 0, 0, perturbation, perturbation, perturbation, perturbation, 0, 0, 0])
+                # action_perturbation = np.array([0, 0, 0, 0, 0, 0, 0]).reshape(action.shape)
                 action = action + action_perturbation
+                print(f"Action after perturbation: {action}")
             if self.abs_action:
                 action = self.undo_transform_action(action)
             obs, reward, done, info = self.env.step(action)
@@ -159,7 +169,7 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             im = ax.imshow(observations[i][0, :, :, :].transpose(1, 2, 0))
             ims.append([im])
         ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
-        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/diffusion_perturbed_pick_0.15_two_perturb.gif', writer='imagemagick', fps=4)
+        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/diffusion_policy_perturbations/perturb_4567_{perturbation}.gif', writer='imagemagick', fps=4)
     
     def plot_trajectories(self, trajectories: list, filename, perturbed_trajectories=None, cfg=None):
         # convert trajectories to tensor
@@ -205,20 +215,46 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             plt.close(fig)
             wandb.log({'video': wandb.Video(filename, fps=4, format="gif")}) 
         # also save a 3D interactive plot of the last frame
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
-        ax.scatter(trajectory_points_for_fig[-2, :, 0], trajectory_points_for_fig[-2, :, 1], trajectory_points_for_fig[-2, :, 2], alpha=0.7, color="#67a9cf", label="Trajectory samples")
+        # save a 3D interactive plot of the last frame using Plotly
+        fig = go.Figure()
+        fig.add_trace(go.Scatter3d(
+            x=trajectory_points_for_fig[-1, :, 0],
+            y=trajectory_points_for_fig[-1, :, 1],
+            z=trajectory_points_for_fig[-1, :, 2],
+            mode='markers',
+            marker=dict(size=5, color='blue'),
+            name="Trajectory samples"
+        ))
         if perturbed_trajectories is not None:
-            ax.scatter(perturbed_trajectory_points_for_fig[-1, :, 0], perturbed_trajectory_points_for_fig[-1, :, 1], perturbed_trajectory_points_for_fig[-1, :, 2], alpha=0.7, color="#ef8a62", label="Perturbed Trajectory samples")
+            fig.add_trace(go.Scatter3d(
+                x=perturbed_trajectory_points_for_fig[-1, :, 0],
+                y=perturbed_trajectory_points_for_fig[-1, :, 1],
+                z=perturbed_trajectory_points_for_fig[-1, :, 2],
+                mode='markers',
+                marker=dict(size=5, color='red'),
+                name="Perturbed Trajectory samples"
+            ))
         if cfg is not None:
             expected_trajectory = trajectory_points_for_fig[-1, :, :3] + np.array(cfg.perturbations)[:3]
-            ax.scatter(expected_trajectory[:, 0], expected_trajectory[:, 1], expected_trajectory[:, 2], alpha=0.7, color="#f46d43", label="Expected Trajectory samples")
-        ax.legend(loc='upper right', fontsize='small')
-        plt.savefig(filename.replace('.gif', '.png'))
+            fig.add_trace(go.Scatter3d(
+                x=expected_trajectory[:, 0],
+                y=expected_trajectory[:, 1],
+                z=expected_trajectory[:, 2],
+                mode='markers',
+                marker=dict(size=5, color='orange'),
+                name="Expected Trajectory samples"
+            ))
+        fig.update_layout(scene=dict(
+            xaxis=dict(range=[min_x, max_x]),
+            yaxis=dict(range=[min_y, max_y]),
+            zaxis=dict(range=[min_z, max_z])
+        ))
+        plotly_filename = filename.replace('.gif', '.html')
+        fig.write_html(plotly_filename)
+
         # save the figure to wandb
         if cfg.log:
-            wandb.log({filename: wandb.Image(plt)})
-        plt.close(fig)
+            wandb.log({plotly_filename: wandb.Html(plotly_filename)})
 
 
 
@@ -260,6 +296,167 @@ class RobomimicSingleImageRunner(BaseImageRunner):
 
         return uaction
 
+    def apply_patch_attack_lstm(self, policy, cfg):
+        """
+        This function applies patch attack to a single image to see
+        if we can modify an image to modify the policy output to our desired 
+        positions
+        """
+        self.env.seed(cfg.seed)
+        # init fn
+        self.init_fn = lambda env, seed: init_fn(env, seed, enable_render=False)
+        # self.env.set_mode('test')
+        obs = self.env.reset()
+        print(f"View: {cfg.view}")
+
+        done = False
+        timestep = 0
+        observations = []
+
+        patch = torch.zeros((1, 3, 84, 84)).to(policy.device)
+        mask = torch.zeros((84, 84)).to(policy.device)
+        mask[: cfg.patch_size, : cfg.patch_size] = 1
+
+        while not done:
+            timestep += 1
+            print(f'timestep: {timestep}')
+            obs_dict = dict(obs)
+            obs_dict = dict_apply(obs_dict, lambda x: torch.from_numpy(x).to(policy.device))
+            obs_dict = dict_apply(obs_dict, lambda x: x.unsqueeze(0))
+            with torch.no_grad():
+                    clean_action_dist = policy.action_dist(obs_dict)
+                    clean_action_means = clean_action_dist.component_distribution.base_dist.loc
+                    target_means = clean_action_means.clone().detach() + torch.tensor(cfg.perturbations).unsqueeze(0).to(policy.device)
+            for i in range(cfg.n_iter):
+                perturbed_view = None
+                perturbed_view = obs_dict[cfg.view] * (1 - mask) + patch * mask
+                perturbed_view = torch.clamp(perturbed_view, 0, 1)
+                perturbed_obs_dict = {k: v.clone().detach() for k, v in obs_dict.items()}
+                perturbed_obs_dict[cfg.view] = perturbed_view.requires_grad_(True)
+                # perturbed_obs_dict = dict_apply(perturbed_obs_dict, lambda x: x.requires_grad_(True))
+                # perturbed_obs_dict = dict_apply(perturbed_obs_dict, lambda x: x.unsqueeze(0))
+                policy.reset()
+                policy.zero_grad()
+                predicted_action_dist = policy.action_dist(perturbed_obs_dict)
+                predicted_action_means = predicted_action_dist.component_distribution.base_dist.loc
+                loss = torch.nn.MSELoss()(predicted_action_means, target_means)
+                loss = -loss
+                print(f"Iteration: {i}, Loss: {loss.item()}")
+                # Ensure gradients are computed
+                if not perturbed_obs_dict[cfg.view].requires_grad:
+                    raise RuntimeError(f"perturbed_obs_dict[{cfg.view}].requires_grad is False")
+                loss.backward()
+                grad = torch.sign(perturbed_obs_dict[cfg.view].grad)
+                grad = grad * mask
+                grad = torch.sum(grad, dim=0)
+                patch = patch + cfg.eps_iter * grad
+                # patch = torch.clamp(patch, -cfg.eps, cfg.eps)
+                patch = patch.detach()
+                loss = loss.detach()
+                mask = mask.detach()
+                obs_dict[cfg.view] = obs_dict[cfg.view].detach()
+            obs_dict[cfg.view] = obs_dict[cfg.view] * (1 - mask) + patch * mask
+            obs_dict[cfg.view] = torch.clamp(obs_dict[cfg.view], 0, 1)
+            with torch.no_grad():
+                action_dict = policy.predict_action(obs_dict)
+            np_action_dict = dict_apply(action_dict,
+                lambda x: x.detach().to('cpu').numpy())
+            action = np_action_dict['action'].squeeze(0)
+            obs, reward, done, info = self.env.step(action)
+            observations.append(obs_dict[cfg.view].squeeze(0).detach().cpu().numpy())
+            if timestep % 100 == 0:
+                print(f'timestep: {timestep}')
+                break
+        self.env.close()
+        # create a video from the observations
+        observations = np.array(observations)
+        ims = []
+        fig, ax = plt.subplots()
+        ax.axis('off')
+        for i in range(len(observations)):
+            im = ax.imshow(observations[i][0, :, :, :].transpose(1, 2, 0))
+            ims.append([im])
+        ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
+        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/lstm_patch_attack.gif', writer='imagemagick', fps=4)
+        # run the attack with the same patch
+        self.env.seed(cfg.seed)
+        obs = self.env.reset()
+        done = False
+        timestep = 0
+        observations = []
+        while not done:
+            timestep += 1
+            print(f'timestep: {timestep}')
+            obs_dict = dict(obs)
+            obs_dict = dict_apply(obs_dict, lambda x: torch.from_numpy(x).to(policy.device))
+            obs_dict = dict_apply(obs_dict, lambda x: x.unsqueeze(0))
+            obs_dict[cfg.view] = obs_dict[cfg.view] * (1 - mask) + patch * mask
+            obs_dict[cfg.view] = torch.clamp(obs_dict[cfg.view], 0, 1)
+            with torch.no_grad():
+                    action_dict = policy.predict_action(obs_dict)
+            np_action_dict = dict_apply(action_dict,
+                lambda x: x.detach().to('cpu').numpy())
+            action = np_action_dict['action'].squeeze(0)
+            obs, reward, done, info = self.env.step(action)
+            observations.append(obs_dict[cfg.view].squeeze(0).detach().cpu().numpy())
+            if timestep % 100 == 0:
+                print(f'timestep: {timestep}')
+                break
+        self.env.close()
+        # create a video from the observations
+        observations = np.array(observations)
+        ims = []
+        fig, ax = plt.subplots()
+        ax.axis('off')
+        for i in range(len(observations)):
+            im = ax.imshow(observations[i][0, :, :, :].transpose(1, 2, 0))
+            ims.append([im])
+        ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
+        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/lstm_patch_attack_perturbed.gif', writer='imagemagick', fps=4)
+        return patch, mask
+
+    def attack_single_image(self, policy, cfg):
+        """
+        This function applies patch attack to a single image to see
+        if we can modify an image to modify the policy output to our desired 
+        positions
+        """
+        self.env.seed(cfg.seed)
+        # init fn
+        self.init_fn = lambda env, seed: init_fn(env, seed, enable_render=False)
+        # self.env.set_mode('test')
+        obs = self.env.reset()
+        obs_dict = dict(obs)
+        obs_dict = dict_apply(obs_dict, lambda x: torch.from_numpy(x).to(policy.device))
+        obs_dict = dict_apply(obs_dict, lambda x: x.unsqueeze(0))
+        # get the action for the clean observation
+        with torch.no_grad():
+                clean_action_dist = policy.action_dist(obs_dict)
+                clean_action_means = clean_action_dist.component_distribution.base_dist.loc
+                target_means = clean_action_means.clone().detach() + torch.tensor(cfg.perturbations).unsqueeze(0).to(policy.device)
+        perturbed_obs_dict = obs_dict.copy()
+        for i in range(cfg.num_iter):
+            perturbed_obs_dict = dict_apply(perturbed_obs_dict, lambda x: x.clone().detach().requires_grad_(True))
+            # perturbed_obs_dict = {k: v.clone().detach() for k, v in obs_dict.items()}
+            # perturbed_obs_dict[cfg.view] = perturbed_obs_dict[cfg.view].requires_grad_(True)
+            # perturbed_obs_dict = dict_apply(perturbed_obs_dict, lambda x: x.requires_grad_(True))
+            # perturbed_obs_dict = dict_apply(perturbed_obs_dict, lambda x: x.unsqueeze(0))
+            policy.reset()
+            policy.zero_grad()
+            predicted_action_dist = policy.action_dist(perturbed_obs_dict)
+            predicted_action_means = predicted_action_dist.component_distribution.base_dist.loc
+            loss = torch.nn.MSELoss()(predicted_action_means, target_means)
+            loss = -loss
+            print(f"Iteration: {i}, Loss: {loss.item()*28}")
+            # Ensure gradients are computed
+            if not perturbed_obs_dict[cfg.view].requires_grad:
+                raise RuntimeError(f"perturbed_obs_dict[{cfg.view}].requires_grad is False")
+            loss.backward()
+            grad = torch.sign(perturbed_obs_dict[cfg.view].grad)
+            perturbed_obs_dict[cfg.view] = perturbed_obs_dict[cfg.view] + cfg.eps_iter * grad
+            perturbed_obs_dict[cfg.view] = torch.clamp(perturbed_obs_dict[cfg.view], 0, 1)
+
+
 
     def run_dp_with_attack(self, policy:BaseImagePolicy, cfg=None):
         print(f"Attacking after steps : {cfg.attack_after_timesteps}")
@@ -284,8 +481,156 @@ class RobomimicSingleImageRunner(BaseImageRunner):
             perturbed_trajectories = policy.predict_action(perturbed_obs_dict)['trajectories']
             # print(f'Perturbed trajectories: {perturbed_trajectories[-1]}')
             # print(f'Clean trajectories: {trajectories[-1]}')
-        filename = f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/diffusion_trajectory_evolution_perturbed_3D_{cfg.perturbations}_eps_{cfg.epsilon}.gif'
+        filename = f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/diffusion_trajectory_clean_input_evolution_perturbed_3D_{cfg.perturbations}_eps_{cfg.epsilon}_timesteps{cfg.attack_after_timesteps}_niters_{cfg.num_iter}.gif'
         self.plot_trajectories(trajectories, filename, perturbed_trajectories, cfg)
+
+    def apply_fgsm_attack_lstm(self, obs_dict, policy:BaseImagePolicy,\
+                    cfg, target_means=None):
+        view = cfg.view
+        clip_min = cfg.clip_min
+        clip_max = cfg.clip_max
+
+        if view == 'both':
+            views = ['agentview_image', 'robot0_eye_in_hand_image']
+        elif isinstance(view, list):
+            views = view
+        elif isinstance(view, str):
+            views = [view]
+        else:
+            raise ValueError("view must be a string or a list of strings")
+
+        # check if the input tensors are within the clip range
+        for view in views:
+            assert torch.all(obs_dict[view] >= clip_min) and torch.all(obs_dict[view] <= clip_max), \
+                "Input tensor is not within the clip range"
+        
+        # create a copy of the original obs_dict that requires grad for backward pass
+        obs_dict = dict_apply(obs_dict, lambda x: x.clone().detach().requires_grad_(True))
+        policy.zero_grad()
+
+        # create a model prediction as ground truth
+        with torch.no_grad():
+            # action_dict = policy.predict_action(obs_dict)
+            # action = action_dict['action']
+            action_dist = policy.action_dist(obs_dict)
+            means = action_dist.component_distribution.base_dist.loc
+
+        # predicted_action = policy.predict_action(obs_dict)['action']
+        predicted_action_dist= policy.action_dist(obs_dict)
+        # print("ACtion dist: ", action_dist)
+        predicted_means = predicted_action_dist.component_distribution.base_dist.loc
+        # predicted_scales = predicted_action_dist.component_distribution.base_dist.scale
+        # print(predicted_means, predicted_scales, means)
+        # print(predicted_action.grad_fn, action.grad_fn)
+        mse_loss = torch.nn.MSELoss()
+        if target_means is None:
+            print("Target means is None")
+            loss = mse_loss(predicted_means, means)
+            loss.backward()
+        else:
+            loss = mse_loss(predicted_means, target_means)
+            loss = -loss
+            loss.backward()
+        if cfg.log:
+            wandb.log({"Loss": loss.item()})
+        for view in views:
+            # assert obs_dict_copy[view].grad_fn is not None, "Input tensor does not have a grad_fn"
+            grad = torch.sign(obs_dict[view].grad)
+            if target_means is None:
+                print("Target means is None")
+                obs_dict[view] = obs_dict[view] + optimize_linear(grad, cfg.epsilon, cfg.norm)
+            else:
+                obs_dict[view] = obs_dict[view] + optimize_linear(grad, cfg.eps_iter, cfg.norm)
+            obs_dict[view] = torch.clamp(obs_dict[view], clip_min, clip_max)
+        # obs_dict['agentview_image'].requires_grad = False
+        return obs_dict
+
+    def apply_pgd_attack_lstm(self, obs_dict, policy:BaseImagePolicy, cfg):
+        """
+        Apply projected gradient descent attack from Madry et al. (2017)
+        """
+        view = cfg.view
+        n_iter = cfg.n_iter
+        clip_min = cfg.clip_min
+        clip_max = cfg.clip_max
+        eps_iter = cfg.eps_iter
+        norm = cfg.norm
+        rand_int = cfg.rand_int
+        # check if the input tensors are within the clip range
+        if view == 'both':
+            # make a list of views in the rgb space
+            views = ['agentview_image', 'robot0_eye_in_hand_image']
+            assert torch.all(obs_dict[views[0]] >= clip_min) and torch.all(obs_dict[views[0]] <= clip_max), \
+                "Input tensor is not within the clip range"
+            assert torch.all(obs_dict[views[1]] >= clip_min) and torch.all(obs_dict[views[1]] <= clip_max), \
+                "Input tensor is not within the clip range"
+        else:
+            views = list(str(view))
+            assert torch.all(obs_dict[view] >= clip_min) and torch.all(obs_dict[view] <= clip_max), \
+                "Input tensor is not within the clip range"
+        if rand_int:
+            # randomly initialize the perturbation from a uniform distribution within the epsilon bound
+            for view in views:
+                perturbation = torch.FloatTensor(obs_dict[view].shape).uniform_(-self.epsilon, self.epsilon).to(policy.device)
+                perturbation = torch.clamp(perturbation, -eps_iter, eps_iter)
+                perturbation = torch.clamp(obs_dict[view] + perturbation, clip_min, clip_max) - obs_dict[view]
+                adv_obs_dict[view] = obs_dict[view] + perturbation
+        with torch.no_grad():
+            clean_action_dist = policy.action_dist(obs_dict)
+            clean_action_means = clean_action_dist.component_distribution.base_dist.loc
+            target_means = clean_action_means.clone().detach() + torch.tensor(cfg.perturbations).unsqueeze(0).to(policy.device)
+        adv_obs_dict = obs_dict.copy()
+        for i in range(n_iter):
+            policy.zero_grad()
+            adv_obs_dict = self.apply_fgsm_attack_lstm(adv_obs_dict, policy, cfg, target_means)
+            for view in views:
+                perturbation = adv_obs_dict[view] - obs_dict[view]
+                if norm == 'l2':
+                    perturbation = perturbation * cfg.epsilon / torch.norm(perturbation, p=2)
+                elif norm == 'linf':
+                    perturbation = torch.clamp(perturbation, -cfg.epsilon, cfg.epsilon)
+                adv_obs_dict[view] = obs_dict[view] + perturbation
+                adv_obs_dict[view] = torch.clamp(adv_obs_dict[view], clip_min, clip_max)
+        return adv_obs_dict
+
+    def run_lstm_gmm_pgd(self, policy:BaseImagePolicy, cfg=None):
+        self.env.seed(cfg.seed)
+        self.init_fn = lambda env, seed: init_fn(env, seed, enable_render=False)
+
+        view = 'agentview_image'
+        done = False
+        obs = self.env.reset()
+        policy.reset()
+        timestep = 0
+        observations = []
+        while not done:
+            tqdm.tqdm.write(f'timestep: {timestep}')            
+            np_obs_dict = dict(obs)
+            obs_dict = dict_apply(np_obs_dict, lambda x: torch.from_numpy(x).to(policy.device))
+            obs_dict = dict_apply(obs_dict, lambda x: x.unsqueeze(0))
+            adv_obs_dict = self.apply_pgd_attack_lstm(obs_dict, policy, cfg)
+            with torch.no_grad():
+                action_dict = policy.predict_action(adv_obs_dict)
+            np_action_dict = dict_apply(action_dict,
+                lambda x: x.detach().to('cpu').numpy())
+            action = np_action_dict['action'].squeeze(0)
+            obs, reward, done, info = self.env.step(action)
+            timestep += 1
+            observations.append(obs_dict['agentview_image'].squeeze(0).detach().cpu().numpy())
+            if timestep % 100 == 0:
+                print(f'timestep: {timestep}')
+                break
+        self.env.close()
+        # create a video from the observations
+        observations = np.array(observations)
+        ims = []
+        fig, ax = plt.subplots()
+        ax.axis('off')
+        for i in range(len(observations)):
+            im = ax.imshow(observations[i][0, :, :, :].transpose(1, 2, 0))
+            ims.append([im])
+        ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
+        ani.save(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/videos/lstm_gmm_pgd_{cfg.perturbations}.gif', writer='imagemagick', fps=4)
 
 
     def run(self, policy:BaseImagePolicy, epsilon=0.1, cfg=None):
@@ -455,7 +800,7 @@ class RobomimicSingleImageRunner(BaseImageRunner):
         else:
             raise ValueError("Patch type not supported")
         return patch, mask
-
+        
 
     def apply_patch_attack(self, policy, obs_dict, cfg, epsilon, clean_action, action_samples):
         '''
@@ -485,7 +830,10 @@ class RobomimicSingleImageRunner(BaseImageRunner):
         adv_obs_dict = obs_dict
         
         for i in range(cfg.num_iter):
-            adv_obs_dict = self.apply_fgsm_attack_loss_of_ibc(adv_obs_dict, policy, cfg, clean_action, action_samples, patch, mask)
+            if cfg.algo == 'ibc':
+                adv_obs_dict = self.apply_fgsm_attack_loss_of_ibc(adv_obs_dict, policy, cfg, clean_action, action_samples, patch, mask)
+            else:
+                raise ValueError("Attack type not supported")
             # for view in views:
             #         perturbation = adv_obs_dict[view] - obs_dict[view]
             #         perturbation = torch.clamp(perturbation, -epsilon, epsilon)
@@ -538,7 +886,7 @@ class RobomimicSingleImageRunner(BaseImageRunner):
                 clean_action_np = clean_action.detach().cpu().numpy()
                 action_samples = torch.cat([clean_action.unsqueeze(1), action_samples], dim=1)
                 action_samples[:, 1] = clean_action_before
-                if cfg.attack_type == 'pgd':
+                if cfg.attack_type == 'pgd' and cfg.algo == 'ibc':
                     adv_obs = self.apply_pgd_attck(policy, obs_dict, cfg, epsilon, clean_action, action_samples)
                     for i in range(3):
                         new_action_samples = torch.distributions.Uniform(
@@ -548,12 +896,14 @@ class RobomimicSingleImageRunner(BaseImageRunner):
                         new_action_samples = torch.cat([clean_action.unsqueeze(1), new_action_samples], dim=1)
                         new_action_samples[:, 1] = clean_action_before
                         adv_obs = self.apply_pgd_attck(policy, adv_obs, cfg, epsilon, clean_action, new_action_samples)
-                elif cfg.attack_type == 'patch':
+                elif cfg.attack_type == 'patch' and cfg.algo == 'ibc':
                     adv_obs = self.apply_patch_attack(policy, obs_dict, cfg, epsilon, clean_action, action_samples)
                     # save the perturbed image
                     perturbed_image = adv_obs['robot0_eye_in_hand_image'].squeeze(0).detach().cpu().numpy()[1]
                     print(max(perturbed_image.flatten()), min(perturbed_image.flatten()))
                     plt.imsave(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/images/adversarial_patch/patch_attack_{perturbation}.png', perturbed_image.transpose(1, 2, 0))
+                else:
+                    raise ValueError("Attack type not supported")
                 # loss_per_perturbation[perturbation] = self.loss_per_iteration
                 # print(f'Loss for epsilon {epsilon}: {self.loss_per_iteration}')
                 # get the probability of taking the same action by running the

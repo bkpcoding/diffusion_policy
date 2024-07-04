@@ -12,13 +12,16 @@ import hydra
 import torch
 from omegaconf import OmegaConf
 import pathlib
+import torch.utils
 from torch.utils.data import DataLoader
 import copy
 import random
+import torch.utils.data
 import wandb
 import tqdm
 import numpy as np
 import shutil
+import pickle
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.robomimic_image_policy import RobomimicImagePolicy
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
@@ -240,6 +243,417 @@ class TrainRobomimicImageWorkspace(BaseWorkspace):
                 json_logger.log(step_log)
                 self.global_step += 1
                 self.epoch += 1
+
+import dill
+class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
+
+    def __init__(self, cfg: OmegaConf, output_dir=None):
+        super().__init__(cfg, output_dir=output_dir)
+
+        # set seed
+        seed = cfg.training.seed
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+
+        checkpoint = cfg.checkpoint
+        payload = torch.load(open(checkpoint, 'rb'), pickle_module=dill)
+        cfg_loaded = payload['cfg']
+
+        cls = hydra.utils.get_class(cfg_loaded._target_)
+        workspace = cls(cfg_loaded, output_dir=output_dir)
+        workspace: BaseWorkspace
+        workspace.load_payload(payload, exclude_keys=None, include_keys=None)
+        try:
+            self.model = workspace.model
+        except AttributeError:
+            self.model = workspace.policy
+        self.model.to(torch.device(cfg.training.device))
+        # configure training state
+        self.global_step = 0
+        self.epoch = 0
+
+
+    def run(self):
+        cfg = copy.deepcopy(self.cfg)
+        view = cfg.view
+        device = cfg.training.device
+        dataset: BaseImageDataset
+        dataset = hydra.utils.instantiate(cfg.task.dataset)
+        assert isinstance(dataset, BaseImageDataset)
+        train_dataloader = DataLoader(dataset, **cfg.dataloader)
+        normalizer = dataset.get_normalizer()
+
+        # configure validation dataset
+        val_dataset = dataset.get_validation_dataset()
+        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
+
+        self.model.set_normalizer(normalizer)
+
+        # configure env
+        env_runner: BaseImageRunner
+        env_runner = hydra.utils.instantiate(
+            cfg.task.env_runner,
+            output_dir=self.output_dir)
+        assert isinstance(env_runner, BaseImageRunner)
+
+
+        if cfg.training.debug:
+            cfg.training.num_epochs = 2
+            cfg.training.max_train_steps = 3
+            cfg.training.max_val_steps = 3
+            cfg.training.rollout_every = 1
+            cfg.training.checkpoint_every = 1
+            cfg.training.val_every = 1
+            cfg.training.sample_every = 1
+
+        if cfg.log:
+            wandb.init(
+                project="offline_bc_evaluation",
+                name=f"vanilla_bc_{cfg.epsilon}_targeted_{cfg.targeted}_view_{view}"
+            )
+            wandb.log({"epsilon": cfg.epsilon, "epsilon_step": cfg.epsilon_step, "targeted": cfg.targeted, "view": view})
+        # set the model in eval mode
+        self.model.eval()
+        # training loop for the universal perturbation
+        self.univ_pert = torch.zeros((3, 84, 84)).to(device)
+        log_path = os.path.join(self.output_dir, 'logs.json.txt')
+        with JsonLogger(log_path) as json_logger:
+            for local_epoch_idx in range(cfg.training.num_epochs):
+                step_log = dict()
+                # ========= train for this epoch ==========
+                train_losses = list()
+                loss_per_epoch = 0
+                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
+                        leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
+                    for batch_idx, batch in enumerate(tepoch):
+                        self.model.zero_grad()
+                        # device transfer
+                        batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                        obs = batch['obs']
+                        # apply the patch the view
+                        obs[view] = obs[view] + self.univ_pert
+                        # clamp the observation to be between 0 and 1
+                        obs[view] = torch.clamp(obs[view], 0, 1)
+                        obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
+                        # set the requires_grad to true
+                        obs[view].requires_grad = True
+                        predicted_action = self.model.predict_action(obs)['action'].to(device)
+                        # with torch.no_grad():
+                        #     predicted_action2 = self.model.predict_action(obs)['action'].to(device)
+                        if cfg.targeted:
+                            batch['action'] = batch['action'] + torch.tensor(cfg.perturbations).to(device)
+                            loss = -torch.nn.functional.mse_loss(predicted_action, batch['action'])
+                        else:
+                            loss = torch.nn.functional.mse_loss(predicted_action, batch['action'])
+                        # loss = torch.nn.functional.mse_loss(predicted_action, predicted_action2)
+                        # take the gradient of the loss with respect to the perturbation
+                        loss.backward()
+                        loss_per_epoch += loss.item()
+                        # update the perturbation
+                        self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sum(obs[view].grad.sign(), dim=0)
+                        # clip the perturbation
+                        self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
+                print(f"Loss for {self.epoch}: {loss_per_epoch}")
+                if cfg.log:
+                    wandb.log({"loss": loss_per_epoch, "epoch": self.epoch})
+                # print(f"Linf norm of the perturbation: {torch.norm(self.univ_pert, p=float('inf'))}")
+                print(f"L2 norm of the perturbation: {torch.norm(self.univ_pert, p=2)}")
+                # run rollout
+                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch != 0:
+                    runner_log = env_runner.run(self.model, self.univ_pert, cfg)
+                    # log all
+                    step_log.update(runner_log)
+                    test_mean_score= runner_log['test/mean_score']
+                    print(f"Test mean score: {test_mean_score}")
+                    if cfg.log:
+                        wandb.log({"test_mean_score": test_mean_score, "epoch": self.epoch})
+                    # save the patch
+                    if cfg.targeted:
+                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
+                    else:
+                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
+                    pickle.dump(self.univ_pert, open(patch_path, 'wb'))
+                self.epoch += 1
+        wandb.finish()
+
+import dill
+# turn off cudann for backprop
+torch.backends.cudnn.enabled = False
+class TrainRobomimicUniPertImageWorkspaceRNN(BaseWorkspace):
+
+    def __init__(self, cfg: OmegaConf, output_dir=None):
+        super().__init__(cfg, output_dir=output_dir)
+
+        # set seed
+        seed = cfg.training.seed
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+
+        checkpoint = cfg.checkpoint
+        payload = torch.load(open(checkpoint, 'rb'), pickle_module=dill)
+        cfg_loaded = payload['cfg']
+
+        cls = hydra.utils.get_class(cfg_loaded._target_)
+        workspace = cls(cfg_loaded, output_dir=output_dir)
+        workspace: BaseWorkspace
+        workspace.load_payload(payload, exclude_keys=None, include_keys=None)
+        try:
+            self.model = workspace.model
+        except AttributeError:
+            self.model = workspace.policy
+        self.model.to(torch.device(cfg.training.device))
+        # configure training state
+        self.global_step = 0
+        self.epoch = 0
+
+
+    def run(self):
+        cfg = copy.deepcopy(self.cfg)
+        view = cfg.view
+        device = cfg.training.device
+        dataset: BaseImageDataset
+        dataset = hydra.utils.instantiate(cfg.task.dataset)
+        assert isinstance(dataset, BaseImageDataset)
+        train_dataloader = DataLoader(dataset, **cfg.dataloader)
+        normalizer = dataset.get_normalizer()
+
+        # configure validation dataset
+        val_dataset = dataset.get_validation_dataset()
+        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
+
+        self.model.set_normalizer(normalizer)
+
+        # configure env
+        env_runner: BaseImageRunner
+        env_runner = hydra.utils.instantiate(
+            cfg.task.env_runner,
+            output_dir=self.output_dir)
+        assert isinstance(env_runner, BaseImageRunner)
+
+
+        if cfg.training.debug:
+            cfg.training.num_epochs = 2
+            cfg.training.max_train_steps = 3
+            cfg.training.max_val_steps = 3
+            cfg.training.rollout_every = 1
+            cfg.training.checkpoint_every = 1
+            cfg.training.val_every = 1
+            cfg.training.sample_every = 1
+
+        if cfg.log:
+            wandb.init(
+                project="offline_bc_evaluation",
+                name=f"lstm_gmm_{cfg.epsilon}_targeted_{cfg.targeted}_view_{view}"
+            )
+            wandb.log({"epsilon": cfg.epsilon, "epsilon_step": cfg.epsilon_step, "targeted": cfg.targeted, "view": view})
+        # set the model in eval mode
+        self.model.eval()
+        # training loop for the universal perturbation
+        self.univ_pert = torch.zeros((3, 84, 84)).to(device)
+        log_path = os.path.join(self.output_dir, 'logs.json.txt')
+        with JsonLogger(log_path) as json_logger:
+            for local_epoch_idx in range(cfg.training.num_epochs):
+                step_log = dict()
+                # ========= train for this epoch ==========
+                train_losses = list()
+                loss_per_epoch = 0
+                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
+                        leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
+                    for batch_idx, batch in enumerate(tepoch):
+                        self.model.zero_grad()
+                        # device transfer
+                        batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                        obs = batch['obs']
+                        if batch['obs']['agentview_image'].shape[0] != cfg.dataloader.batch_size:
+                            continue
+                        obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
+                        with torch.no_grad():
+                            action_dist_clean = self.model.action_dist(obs)
+                            action_means_clean = action_dist_clean.component_distribution.base_dist.loc
+                        # apply the patch the view
+                        obs[view] = obs[view] + self.univ_pert
+                        # clamp the observation to be between 0 and 1
+                        obs[view] = torch.clamp(obs[view], 0, 1)
+                        obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
+                        # set the requires_grad to true
+                        obs[view].requires_grad = True
+                        action_dist = self.model.action_dist(obs)
+                        action_means = action_dist.component_distribution.base_dist.loc
+                        if cfg.targeted:
+                            action_means_clean = action_means_clean + torch.tensor(cfg.perturbations).to(device)
+                            loss = -torch.nn.functional.mse_loss(action_means, action_means_clean)
+                            # loss = -torch.nn.functional.mse_loss(predicted_action, batch['action'])
+                        else:
+                            loss = torch.nn.functional.mse_loss(action_means, action_means_clean)
+                        # loss = torch.nn.functional.mse_loss(predicted_action, predicted_action2)
+                        # take the gradient of the loss with respect to the perturbation
+                        loss.backward()
+                        loss_per_epoch += loss.item()
+                        # update the perturbation
+                        self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sum(obs[view].grad.sign(), dim=0)
+                        # clip the perturbation
+                        self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
+                print(f"Loss for {self.epoch}: {loss_per_epoch}")
+                if cfg.log:
+                    wandb.log({"loss": loss_per_epoch, "epoch": self.epoch})
+                # print(f"Linf norm of the perturbation: {torch.norm(self.univ_pert, p=float('inf'))}")
+                print(f"L2 norm of the perturbation: {torch.norm(self.univ_pert, p=2)}")
+                # run rollout
+                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch != 0:
+                    runner_log = env_runner.run(self.model, self.univ_pert, cfg)
+                    # log all
+                    step_log.update(runner_log)
+                    test_mean_score= runner_log['test/mean_score']
+                    print(f"Test mean score: {test_mean_score}")
+                    if cfg.log:
+                        wandb.log({"test_mean_score": test_mean_score, "epoch": self.epoch})
+                    # save the patch
+                    if cfg.targeted:
+                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
+                    else:
+                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
+                    pickle.dump(self.univ_pert, open(patch_path, 'wb'))
+                self.epoch += 1
+        wandb.finish()
+
+class TrainRobomimicUniPertImageWorkspaceIBC(BaseWorkspace):
+
+    def __init__(self, cfg: OmegaConf, output_dir=None):
+        super().__init__(cfg, output_dir=output_dir)
+
+        # set seed
+        seed = cfg.training.seed
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+
+        checkpoint = cfg.checkpoint
+        payload = torch.load(open(checkpoint, 'rb'), pickle_module=dill)
+        cfg_loaded = payload['cfg']
+
+        cls = hydra.utils.get_class(cfg_loaded._target_)
+        workspace = cls(cfg_loaded, output_dir=output_dir)
+        workspace: BaseWorkspace
+        workspace.load_payload(payload, exclude_keys=None, include_keys=None)
+        try:
+            self.model = workspace.model
+        except AttributeError:
+            self.model = workspace.policy
+        self.model.to(torch.device(cfg.training.device))
+        # configure training state
+        self.global_step = 0
+        self.epoch = 0
+
+    def run(self):
+        cfg = copy.deepcopy(self.cfg)
+        view = cfg.view
+        device = cfg.training.device
+        dataset: BaseImageDataset
+        dataset = hydra.utils.instantiate(cfg.task.dataset)
+        assert isinstance(dataset, BaseImageDataset)
+        train_dataloader = DataLoader(dataset, **cfg.dataloader)
+        normalizer = dataset.get_normalizer()
+
+        # configure validation dataset
+        val_dataset = dataset.get_validation_dataset()
+        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
+
+        self.model.set_normalizer(normalizer)
+
+        # configure env
+        env_runner: BaseImageRunner
+        env_runner = hydra.utils.instantiate(
+            cfg.task.env_runner,
+            output_dir=self.output_dir)
+        assert isinstance(env_runner, BaseImageRunner)
+
+
+        if cfg.training.debug:
+            cfg.training.num_epochs = 2
+            cfg.training.max_train_steps = 3
+            cfg.training.max_val_steps = 3
+            cfg.training.rollout_every = 1
+            cfg.training.checkpoint_every = 1
+            cfg.training.val_every = 1
+            cfg.training.sample_every = 1
+
+        if cfg.log:
+            wandb.init(
+                project="offline_bc_evaluation",
+                name=f"lstm_gmm_{cfg.epsilon}_targeted_{cfg.targeted}_view_{view}"
+            )
+            wandb.log({"epsilon": cfg.epsilon, "epsilon_step": cfg.epsilon_step, "targeted": cfg.targeted, "view": view})
+        # set the model in eval mode
+        self.model.eval()
+        # training loop for the universal perturbation
+        self.univ_pert = torch.zeros((3, 84, 84)).to(device)
+        log_path = os.path.join(self.output_dir, 'logs.json.txt')
+        with JsonLogger(log_path) as json_logger:
+            for local_epoch_idx in range(cfg.training.num_epochs):
+                step_log = dict()
+                # ========= train for this epoch ==========
+                train_losses = list()
+                loss_per_epoch = 0
+                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
+                        leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
+                    for batch_idx, batch in enumerate(tepoch):
+                        self.model.zero_grad()
+                        # device transfer
+                        batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                        obs = batch['obs']
+                        if batch['obs']['agentview_image'].shape[0] != cfg.dataloader.batch_size:
+                            continue
+                        obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
+                        with torch.no_grad():
+                            action_dist_clean = self.model.action_dist(obs)
+                            action_means_clean = action_dist_clean.component_distribution.base_dist.loc
+                        # apply the patch the view
+                        obs[view] = obs[view] + self.univ_pert
+                        # clamp the observation to be between 0 and 1
+                        obs[view] = torch.clamp(obs[view], 0, 1)
+                        obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
+                        # set the requires_grad to true
+                        obs[view].requires_grad = True
+                        action_dist = self.model.action_dist(obs)
+                        action_means = action_dist.component_distribution.base_dist.loc
+                        if cfg.targeted:
+                            action_means_clean = action_means_clean + torch.tensor(cfg.perturbations).to(device)
+                            loss = -torch.nn.functional.mse_loss(action_means, action_means_clean)
+                            # loss = -torch.nn.functional.mse_loss(predicted_action, batch['action'])
+                        else:
+                            loss = torch.nn.functional.mse_loss(action_means, action_means_clean)
+                        # loss = torch.nn.functional.mse_loss(predicted_action, predicted_action2)
+                        # take the gradient of the loss with respect to the perturbation
+                        loss.backward()
+                        loss_per_epoch += loss.item()
+                        # update the perturbation
+                        self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sum(obs[view].grad.sign(), dim=0)
+                        # clip the perturbation
+                        self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
+                print(f"Loss for {self.epoch}: {loss_per_epoch}")
+                if cfg.log:
+                    wandb.log({"loss": loss_per_epoch, "epoch": self.epoch})
+                # print(f"Linf norm of the perturbation: {torch.norm(self.univ_pert, p=float('inf'))}")
+                print(f"L2 norm of the perturbation: {torch.norm(self.univ_pert, p=2)}")
+                # run rollout
+                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch != 0:
+                    runner_log = env_runner.run(self.model, self.univ_pert, cfg)
+                    # log all
+                    step_log.update(runner_log)
+                    test_mean_score= runner_log['test/mean_score']
+                    print(f"Test mean score: {test_mean_score}")
+                    if cfg.log:
+                        wandb.log({"test_mean_score": test_mean_score, "epoch": self.epoch})
+                    # save the patch
+                    if cfg.targeted:
+                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
+                    else:
+                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
+                    pickle.dump(self.univ_pert, open(patch_path, 'wb'))
+                self.epoch += 1
+        wandb.finish()
 
 
 @hydra.main(

@@ -332,7 +332,7 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             loss = F.cross_entropy(logits, labels)
         return loss
 
-    def compute_loss_with_grad(self, obs_dict_copy, actions, action_samples = None):
+    def compute_loss_with_grad(self, obs_dict_copy, actions, action_samples = None, return_energy=False):
         """
         Similar to the compute_loss function, but does not create 
         a new observation dictionary for the forward pass. Instead,
@@ -398,12 +398,14 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             loss = F.cross_entropy(logits, labels)
         # print the actions given and the most probable action
         # print("Actions given: ", actions)
-        # most_probable_action = torch.argmax(logits, dim=1)
-        # most_probable_action = action_samples[torch.arange(action_samples.size(0)), most_probable_action, :]
+        most_probable_action = torch.argmax(logits, dim=1)
+        most_probable_action = action_samples[torch.arange(action_samples.size(0)), most_probable_action, :]
         # print("Most probable action: ", most_probable_action)
         # print('Energy of the first action: ', logits[0, 0])
         # print('Energy of the second action: ', logits[0, 1])
         # print('Energy of the most probable action: ', torch.max(logits[0, 1:]))
+        if return_energy:
+            return loss, obs_dict_copy, nobs_features, (logits[0, 0], logits[0, 1])
         return loss, obs_dict_copy, nobs_features
  
 

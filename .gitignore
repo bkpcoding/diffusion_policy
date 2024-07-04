@@ -6,7 +6,12 @@ data
 data_local
 .vscode
 _wandb
-plots/
+plots/videos
+plots/images
+plots/pkl_files
+multirun/
+*html
+*npy
 
 **/.DS_Store
 

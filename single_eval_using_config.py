@@ -17,11 +17,11 @@ from hydra.utils import to_absolute_path, instantiate
 from hydra.core.global_hydra import GlobalHydra
 
 
-# torch.backends.cudnn.enabled = False
+torch.backends.cudnn.enabled = False
 @hydra.main(config_path='diffusion_policy/eval_configs', config_name='diffusion_policy_image_ph_pick_single_pgd')
-# @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_adversarial')
+# @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_single_adversarial')
 def main(cfg):
-    checkpoint = cfg.checkpoints[0]
+    checkpoint = cfg.checkpoint
     task = cfg.task
     attack = cfg.attack
     algo = cfg.algo
@@ -69,6 +69,8 @@ def main(cfg):
     policy.to(device)
     policy.eval()
     cfg_loaded.task.env_runner['_target_'] = cfg._target_
+    if cfg.max_steps is not None:
+        cfg_loaded.task.env_runner['max_steps'] = cfg.max_steps
     env_runner = hydra.utils.instantiate(
         cfg_loaded.task.env_runner,
         output_dir=output_dir)
@@ -77,9 +79,14 @@ def main(cfg):
     # else:
     #     runner_log = env_runner.run(policy)
     # env_runner.probability_of_action(policy, cfg)
-    # env_runner.create_videos(policy, cfg, perturbation = -0.15)
+    # env_runner.create_videos(policy, cfg, perturbation = 0.6)
+    # env_runner.apply_patch_attack_single_image(policy, cfg)
+    # env_runner.attack_single_image(policy, cfg)
+    # env_runner.run_lstm_gmm_pgd(policy, cfg)
     # env_runner.create_trajectory_evolution(policy, cfg)
+    print("Running DP with attack")
     env_runner.run_dp_with_attack(policy, cfg)
+    # env_runner.apply_patch_attack_lstm(policy, cfg)
 
     # json_log = dict()
     # for key, value in runner_log.items():

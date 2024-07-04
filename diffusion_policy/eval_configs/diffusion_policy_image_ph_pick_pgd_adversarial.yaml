@@ -1,10 +1,15 @@
 _target_: 'diffusion_policy.env_runner.robomimic_image_runner.AdversarialRobomimicImageRunnerDP'
-checkpoints: ['/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/diffusion_policy_cnn/train_0/checkpoints/epoch=0300-test_mean_score=1.000.ckpt']
+checkpoints: 
+    train0: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/diffusion_policy_cnn/train_0/checkpoints/epoch=0300-test_mean_score=1.000.ckpt'
+    train1: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/diffusion_policy_cnn/train_1/checkpoints/epoch=0250-test_mean_score=1.000.ckpt'
+    train2: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/diffusion_policy_cnn/train_2/checkpoints/epoch=0250-test_mean_score=1.000.ckpt'
+
+checkpoint: ${checkpoints.train0}
 task: 'lift_ph'
 dataset_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/robomimic/datasets/lift/ph/image_abs.hdf5'
 algo: 'Diffusion_Policy'
-n_envs: 1
-n_test: 1
+n_envs: 2
+n_test: 2
 n_train: 1
 log: True
 device: 'cuda:0'
@@ -13,19 +18,27 @@ attack_type: 'pgd'
 # epsilons: [0.015625, 0.03125, 0.0625, 0.125]
 # epsilons: [0.01, 0.03, 0.1, 0.3, 0.5]
 # epsilons: [0.0078125, 0.01953125, 0.03125, 0.0625, 0.125]
-epsilons: [0.125, 0.2, 0.3]
-epsilon: 0.125
+epsilons:
+    zero: 0.00
+    first: 0.015625
+    second: 0.03125
+    third: 0.0625
+    fourth: 0.125
+    fifth: 0.25
+
+epsilon: ${epsilons.fourth}
 clip_min: -1
 clip_max: 1
-view: 'robot0_eye_in_hand_image'
+view: 'both'
 rand_target: False
 action_space: None
 rand_int: False
-perturbations: [0.15, 0.15, 0, 0, 0, 0, 0, 0, 0, 0]
+perturbations: [0, 0.45, 0, 0, 0, 0, 0, 0, 0, 0]
 eps_iter: 0.01
-num_iter: 40
+num_iter: 4
 norm: 'linf'
-attack_after_timesteps: 0.8
+attack_after_timesteps: 0.9
+max_steps: 400
 # pgd:
 #  eta_bound:
 #  num_iter:
