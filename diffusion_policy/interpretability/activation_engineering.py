@@ -41,7 +41,7 @@ def linear_probing(activations, object_dataset):
 
 
 torch.backends.cudnn.enabled = False
-@hydra.main(config_path='../interpretability_configs', config_name='lstm_gmm_image_ph_pick')
+@hydra.main(config_path='../interpretability_configs', config_name='bet_image_ph_pick')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_single_adversarial')
 def main(cfg):
     checkpoint = cfg.checkpoint

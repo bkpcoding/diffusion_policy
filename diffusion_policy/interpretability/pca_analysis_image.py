@@ -27,7 +27,7 @@ def linear_probing(activations, object_dataset):
     activations = np.array(activations)
     activations = activations.reshape(activations.shape[0], -1)
     object_dataset = np.array(object_dataset)
-    object_dataset = object_dataset[:, 0:2]
+    object_dataset = object_dataset[:, 7:9]
     # split the dataset into train and test
     X_train, X_test, y_train, y_test = train_test_split(activations, object_dataset, test_size=0.2)
     # fit a linear regression model
@@ -40,7 +40,7 @@ def linear_probing(activations, object_dataset):
     return mse, model
 
 torch.backends.cudnn.enabled = False
-@hydra.main(config_path='../interpretability_configs', config_name='lstm_gmm_image_ph_pick')
+@hydra.main(config_path='../interpretability_configs', config_name='bet_image_ph_pick')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_single_adversarial')
 def main(cfg):
     checkpoint = cfg.checkpoint
@@ -65,7 +65,10 @@ def main(cfg):
     workspace = cls(cfg_loaded, output_dir=output_dir)
     workspace: BaseWorkspace
     workspace.load_payload(payload, exclude_keys=None, include_keys=None)
-    policy = workspace.model
+    try:
+        policy = workspace.model
+    except AttributeError:
+        policy = workspace.policy
 
     try:
         if cfg_loaded.training.use_ema:
@@ -91,14 +94,20 @@ def main(cfg):
  
     # convert object_dataset into a numpy array
     object_dataset = np.array(object_dataset)
-    obs_encoder = policy.nets['policy'].nets['encoder'].nets['obs']
+    try:
+        obs_encoder = policy.nets['policy'].nets['encoder'].nets['obs']
+    except:
+        obs_encoder = policy.obs_encoder
     image_encoder = obs_encoder.obs_nets['robot0_eye_in_hand_image']
     # load the universal patch
-    patch = np.load(cfg.patch_path)
+    patch = np.load(cfg.patch_path, allow_pickle=True)
+    print(f"Patch shape: {patch.shape}, image shape: {image_dataset[0].shape}")
+    if type(patch) == torch.Tensor:
+        patch = patch.cpu().numpy()
     # apply the patch to the image dataset
     perturbed_image_dataset = []
     for image in image_dataset:
-        perturbed_image_dataset.append(image + patch)
+        perturbed_image_dataset.append(np.concatenate([image, patch], axis=0))
     # convert the images to tensor
     image_dataset = [torch.tensor(image)[0].to(device).unsqueeze(0) for image in image_dataset]
     image_dataset = [image[:, :, 4:80, 4:80] for image in image_dataset]
@@ -115,6 +124,7 @@ def main(cfg):
     perturbed_activations = []
     for image in image_dataset:
         activations.append(image_encoder(image).detach().cpu().numpy())
+        # print activations shape of image_encoder.backbone output
     
     for image in perturbed_image_dataset:
         perturbed_activations.append(image_encoder(image).detach().cpu().numpy())
@@ -128,12 +138,12 @@ def main(cfg):
     # print(f"No red linear probing MSE: {no_red_linear_probing_mse}")
     no_red_object_dataset = model.predict(np.array(no_red_activations).reshape(len(no_red_activations), -1))
     # calculate the mean squared error between the no red object dataset and the original object dataset
-    mse_no_red = mean_squared_error(object_dataset[:, 0:2], no_red_object_dataset)
+    mse_no_red = mean_squared_error(object_dataset[:, 7:9], no_red_object_dataset)
     print("Mean Squared Error between no red and original object dataset: ", mse_no_red)
     # apply the model to the perturbed activations
     perturbed_object_dataset = model.predict(np.array(perturbed_activations).reshape(len(perturbed_activations), -1))
     # calculate the mean squared error between the perturbed object dataset and the original object dataset
-    mse = mean_squared_error(object_dataset[:, 0:2], perturbed_object_dataset)
+    mse = mean_squared_error(object_dataset[:, 7:9], perturbed_object_dataset)
     print(f"Mean Squared Error between original and perturbed object dataset: {mse}")
     # plot the 3D plot of the object dataset and the perturbed object dataset on the same plot
     import plotly.express as px
@@ -174,22 +184,21 @@ def main(cfg):
     fig = go.Figure(data=[trace1, trace2, trace3], layout=layout)
 
     # Save the figure
-    fig.write_html(os.path.join(cfg.plot_path, 'object_and_perturbed_no_red_samemodel_abs_dataset_300pts.html'))
+    fig.write_html(os.path.join(cfg.plot_path, f'object_and_perturbed_no_red_samemodel_rel_dataset_300pts_tar_{algo}.html'))
 
     # image_dataset = image_dataset[:30]
     # object_dataset = object_dataset[:30]
     # do linear probing on the image dataset
     # plot the images as gif to see the dataset
-    from matplotlib import animation
-    import matplotlib.pyplot as plt
-    fig = plt.figure()
-    ims = []
-    for image in no_red_image_dataset:
-        image = image.transpose(1, 2).transpose(2, 3)
-        print(image.shape)
-        ims.append([plt.imshow(image[0].cpu().numpy(), animated=True)])
-    ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
-    ani.save(os.path.join(cfg.plot_path, 'no_red_image_dataset.gif'))
+    # from matplotlib import animation
+    # import matplotlib.pyplot as plt
+    # fig = plt.figure()
+    # ims = []
+    # for image in no_red_image_dataset:
+    #     image = image.transpose(1, 2).transpose(2, 3)
+    #     ims.append([plt.imshow(image[0].cpu().numpy(), animated=True)])
+    # ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
+    # ani.save(os.path.join(cfg.plot_path, 'no_red_image_dataset.gif'))
     # # crop the images to 76x76 from 84x84
     # image_dataset = [image[:, :, 4:80, 4:80] for image in image_dataset]
     # activations = []
