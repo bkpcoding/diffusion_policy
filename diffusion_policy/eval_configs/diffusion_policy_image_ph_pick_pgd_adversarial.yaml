@@ -8,13 +8,14 @@ checkpoint: ${checkpoints.train0}
 task: 'lift_ph'
 dataset_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/robomimic/datasets/lift/ph/image_abs.hdf5'
 algo: 'Diffusion_Policy'
-n_envs: 2
-n_test: 2
-n_train: 1
+n_envs: 26
+n_test: 50
+n_train: 2
 log: True
-device: 'cuda:0'
+device: 'cuda:3'
 attack: True
 attack_type: 'pgd'
+targeted: False
 # epsilons: [0.015625, 0.03125, 0.0625, 0.125]
 # epsilons: [0.01, 0.03, 0.1, 0.3, 0.5]
 # epsilons: [0.0078125, 0.01953125, 0.03125, 0.0625, 0.125]

@@ -335,7 +335,7 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
             cond_data[:,:To,Da:] = torch.zeros(size=(B, To, Do), device=device, dtype=dtype)
             cond_mask[:,:To,Da:] = True
         trajectory = torch.randn(
-                size=cond_data.shape, 
+                size=cond_data.shape,
                 dtype=cond_data.dtype,
                 device=cond_data.device,)
         nobs_perturbed = nobs.copy()
@@ -381,7 +381,10 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
             # perturb the observation
             prev_obs = nobs.copy()
             if t < (1 - cfg.attack_after_timesteps) * self.num_inference_steps:
-                target_trajectory = trajectory.detach() + torch.tensor(cfg.perturbations, device=trajectory.device).unsqueeze(0)
+                if cfg.targeted:
+                    target_trajectory = trajectory.detach() + torch.tensor(cfg.perturbations, device=trajectory.device).unsqueeze(0)
+                else:
+                    target_trajectory = trajectory.detach()
                 for j in range(cfg.num_iter):
                     predicted_trajectory = prev_trajectory.detach().clone()
                     nobs_perturbed = dict_apply(nobs_perturbed, lambda x: x.clone().detach().requires_grad_(True))
@@ -415,7 +418,10 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
                     loss = mse_loss(predicted_trajectory, target_trajectory)
                     loss = loss.mean()
                     # we need to decrease the loss
-                    loss = -loss
+                    if cfg.targeted:
+                        loss = -loss
+                    else:
+                        loss = loss
                     # euclidean distance from the predicted trajectory and the original trajectory
                     euc_dist = torch.norm(predicted_trajectory - trajectory, p=2)
                     l1_dist = torch.norm(predicted_trajectory - trajectory, p=1)

@@ -15,6 +15,7 @@ from omegaconf import OmegaConf
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import to_absolute_path, instantiate
 from hydra.core.global_hydra import GlobalHydra
+import pickle
 
 
 torch.backends.cudnn.enabled = False
@@ -22,16 +23,19 @@ torch.backends.cudnn.enabled = False
 def get_run_name(checkpoint, cfg, attack, view):
     if attack:
         return f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-' \
-               f'{checkpoint.split("/")[-3]}-{cfg.attack_type}_adversarial_on_{view}_randtar_{cfg.rand_target}'
+               f'{checkpoint.split("/")[-3]}-{cfg.attack_type}_adversarial_on_{view}_tar_{cfg.targeted}'
     else:
         return f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-{checkpoint.split("/")[-3]}'
+    # return f'bet_pgd_perturbation_gradview_check_{cfg.perturbations}'
 
 def init_wandb(checkpoint, cfg, attack, view):
     run_name = get_run_name(checkpoint, cfg, attack, view)
     
     # Try to find an existing run with a similar name
     api = wandb.Api()
-    runs = api.runs("sagar8/BC_Evaluation")
+    # project = "grad_check_adv"
+    project = "BC_Evaluation"
+    runs = api.runs(f"sagar8/{project}")
     
     existing_run = None
     for run in runs:
@@ -41,10 +45,10 @@ def init_wandb(checkpoint, cfg, attack, view):
     
     if existing_run:
         # If a run with the same name exists, resume it
-        return wandb.init(project='BC_Evaluation', id=existing_run.id, resume='must')
+        return wandb.init(project=project, id=existing_run.id, resume='must')
     else:
         # If no matching run exists, create a new one
-        return wandb.init(project='BC_Evaluation', name=run_name)
+        return wandb.init(project=project, name=run_name)
 
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='diffusion_policy_image_ph_pick_pgd_adversarial')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_pgd_adversarial')
@@ -52,6 +56,10 @@ def init_wandb(checkpoint, cfg, attack, view):
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_ph_pick_adversarial_patch')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_adversarial_patch.yaml')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='vanilla_bc_ph_pick_adversarial_patch.yaml')
+# @hydra.main(config_path='diffusion_policy/eval_configs', config_name='bet_image_ph_pick_pgd_adversarial_patch.yaml')
+# @hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_adversarial.yaml')
+# @hydra.main(config_path='diffusion_policy/eval_configs', config_name='vanilla_bc_image_ph_pick_pgd_adversarial.yaml')
+# @hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_adversarial.yaml')
 @hydra.main(config_path='diffusion_policy/eval_configs', config_name='bet_image_ph_pick_pgd_adversarial.yaml')
 def main(cfg):
     checkpoint = cfg.checkpoint
@@ -63,6 +71,7 @@ def main(cfg):
     epsilon = cfg.epsilon
     dataset_path = cfg.dataset_path
     view = cfg.view
+    print(f"Running attack {attack} on {view} view")
 
     if cfg.log:
         # wandb.init(project='BC_Evaluation', name=f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-\
@@ -79,7 +88,7 @@ def main(cfg):
         config_path = 'diffusion_policy/eval_configs'
         # config_name = 'diffusion_policy_image_ph_pick_pgd_adversarial'
         # config_name = 'vanilla_bc_ph_pick_adversarial_patch'
-        config_name = 'bet_image_ph_pick_pgd_adversarial'
+        config_name = 'ibc_image_ph_pick_adversarial'
         # wandb.log({"xloc": cfg.x_loc, "yloc": cfg.y_loc, "patch_size": cfg.patch_size})
         # config_name = 'lstm_gmm_image_ph_pick_pgd_adversarial'
         config_file_path = to_absolute_path(f"{config_path}/{config_name}.yaml")
@@ -133,7 +142,10 @@ def main(cfg):
     env_runner = hydra.utils.instantiate(
         cfg_loaded.task.env_runner,
         output_dir=output_dir)
-    if attack:
+    if attack and cfg.attack_type == 'patch':
+        patch = pickle.load(open(cfg.patch_path, 'rb'))
+        runner_log = env_runner.run(policy, adversarial_patch=patch, cfg=cfg)
+    elif attack:
         runner_log = env_runner.run(policy, cfg.epsilon, cfg)
     else:
         runner_log = env_runner.run(policy)

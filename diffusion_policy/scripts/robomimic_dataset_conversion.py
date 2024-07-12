@@ -45,7 +45,6 @@ def main(input, output, eval_dir, num_workers):
         eval_dir = pathlib.Path(eval_dir).expanduser()
         assert eval_dir.parent.exists()
         do_eval = True
-    
     converter = RobomimicAbsoluteActionConverter(input)
 
     # run

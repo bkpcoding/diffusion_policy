@@ -330,7 +330,7 @@ class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
                         self.model.zero_grad()
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                        obs = batch['obs']
+                        obs = batch['obs'].copy()
                         # apply the patch the view
                         obs[view] = obs[view] + self.univ_pert
                         # clamp the observation to be between 0 and 1
@@ -339,15 +339,20 @@ class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
                         # set the requires_grad to true
                         obs[view].requires_grad = True
                         predicted_action = self.model.predict_action(obs)['action'].to(device)
-                        # with torch.no_grad():
-                        #     predicted_action2 = self.model.predict_action(obs)['action'].to(device)
+                        with torch.no_grad():
+                            predicted_action2 = self.model.predict_action(batch['obs'])['action'].to(device)
                         if cfg.targeted:
-                            batch['action'] = batch['action'] + torch.tensor(cfg.perturbations).to(device)
-                            loss = -torch.nn.functional.mse_loss(predicted_action, batch['action'])
+                            # batch['action'] = batch['action'] + torch.tensor(cfg.perturbations).to(device)
+                            target_action = predicted_action2 + torch.tensor(cfg.perturbations).to(device)
+                            loss = -torch.nn.functional.mse_loss(predicted_action, target_action)
                         else:
-                            loss = torch.nn.functional.mse_loss(predicted_action, batch['action'])
+                            # loss = torch.nn.functional.mse_loss(predicted_action, batch['action'])
+                            loss = torch.nn.functional.mse_loss(predicted_action, predicted_action2)
                         # loss = torch.nn.functional.mse_loss(predicted_action, predicted_action2)
                         # take the gradient of the loss with respect to the perturbation
+                        if self.epoch == 0:
+                            loss_per_epoch += loss.item()
+                            continue
                         loss.backward()
                         loss_per_epoch += loss.item()
                         # update the perturbation
@@ -602,7 +607,7 @@ class TrainRobomimicUniPertImageWorkspaceIBC(BaseWorkspace):
                         self.model.zero_grad()
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                        obs = batch['obs']
+                        obs = batch['obs'].copy()
                         if batch['obs']['agentview_image'].shape[0] != cfg.dataloader.batch_size:
                             continue
                         obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
@@ -616,14 +621,12 @@ class TrainRobomimicUniPertImageWorkspaceIBC(BaseWorkspace):
                         obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
                         # set the requires_grad to true
                         obs[view].requires_grad = True
-                        action_dist = self.model.action_dist(obs)
-                        action_means = action_dist.component_distribution.base_dist.loc
                         if cfg.targeted:
-                            action_means_clean = action_means_clean + torch.tensor(cfg.perturbations).to(device)
-                            loss = -torch.nn.functional.mse_loss(action_means, action_means_clean)
+                            pass
                             # loss = -torch.nn.functional.mse_loss(predicted_action, batch['action'])
                         else:
-                            loss = torch.nn.functional.mse_loss(action_means, action_means_clean)
+                            batch['obs'] = obs
+                            loss = self.model.compute_loss(batch)
                         # loss = torch.nn.functional.mse_loss(predicted_action, predicted_action2)
                         # take the gradient of the loss with respect to the perturbation
                         loss.backward()

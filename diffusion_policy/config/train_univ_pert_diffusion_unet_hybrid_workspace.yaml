@@ -6,7 +6,7 @@ name: train_diffusion_unet_hybrid
 _target_: diffusion_policy.workspace.train_diffusion_unet_hybrid_workspace.TrainRobomimicUniPertImageWorkspaceDP
 
 checkpoint: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/diffusion_policy_cnn/train_0/checkpoints/epoch=0300-test_mean_score=1.000.ckpt'
-epsilon: 0.125
+epsilon: 0.0625
 epsilon_step: 0.01
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -15,9 +15,10 @@ view: "robot0_eye_in_hand_image"
 # view: 'agentview_image'
 clip_min: 0
 clip_max: 1
-targeted: False
+targeted: True
+pert_dataset: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/robomimic/datasets/lift/ph/image_pert.hdf5'
 perturbations: [0.15, 0.15, 0, 0, 0, 0, 0]
-log: True
+log: False
 
 horizon: 16
 n_obs_steps: 2
@@ -27,6 +28,7 @@ dataset_obs_steps: ${n_obs_steps}
 past_action_visible: False
 keypoint_visible_rate: 1.0
 obs_as_global_cond: True
+dataset_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/robomimic/datasets/lift/ph/image.hdf5'
 
 policy:
   _target_: diffusion_policy.policy.diffusion_unet_hybrid_image_policy.DiffusionUnetHybridImagePolicy
@@ -70,7 +72,7 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 8
+  batch_size: 64
   num_workers: 8
   shuffle: True
   pin_memory: True

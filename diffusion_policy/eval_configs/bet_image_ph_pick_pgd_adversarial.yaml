@@ -8,11 +8,11 @@ task: 'lift_ph'
 dataset_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/robomimic/datasets/lift/ph/image.hdf5'
 algo: 'BET'
 n_envs: 26
-n_test: 50
+n_test: 24
 n_train: 2
-log: True
+log: False
 device: 'cuda:0'
-attack: True
+attack: False
 attack_type: 'pgd'
 epsilons:
     epsilon0: 0.03125
@@ -29,11 +29,11 @@ view: 'both'
 rand_target: False
 action_space: None
 rand_int: False
-perturbations: [0, 0.15, 0.15, 0, 0, 0, 0]
+perturbations: [0., 0.0, 0.25, 0, 0, 0, 0]
 num_iter: 40
 norm: 'linf'
 max_steps: 400
-
+targeted: True
 # pgd:
 #  eta_bound:
 #  num_iter:

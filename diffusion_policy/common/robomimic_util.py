@@ -58,6 +58,9 @@ class RobomimicAbsoluteActionConverter:
         # reshape (N,14) to (N,2,7)
         # or (N,7) to (N,1,7)
         stacked_actions = actions.reshape(*actions.shape[:-1],-1,7)
+        actions_before = stacked_actions
+        stacked_actions = stacked_actions + np.array([0.15, 0.15, 0, 0, 0, 0, 0], dtype=actions.dtype)
+        print("Perturbed actions, with linf norm: ", np.max(np.abs(stacked_actions - actions_before)))
 
         env = self.env
         # generate abs actions

@@ -286,6 +286,7 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
 
 import dill
 import pickle
+from diffusion_policy.common.robomimic_util import RobomimicAbsoluteActionConverter
 class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
@@ -310,6 +311,7 @@ class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
         except AttributeError:
             self.model = workspace.policy
         self.model.to(torch.device(cfg.training.device))
+        self.converter = RobomimicAbsoluteActionConverter(cfg.dataset_path)
         # configure training state
         self.global_step = 0
         self.epoch = 0
@@ -319,6 +321,9 @@ class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
         view = cfg.view
         device = cfg.training.device
         dataset: BaseImageDataset
+        if cfg.targeted:
+            cfg.task.dataset['dataset_path'] = cfg.pert_dataset
+            print("Changed dataset path to", cfg.task.dataset['dataset_path'])
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
@@ -382,14 +387,16 @@ class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
                         # set the requires_grad to true
                         obs[view].requires_grad = True
                         if cfg.targeted:
-                            # loss = -torch.nn.functional.mse_loss(action_means, action_means_clean)
-                            pass
-                            # loss = -torch.nn.functional.mse_loss(predicted_action, batch['action'])
+                            batch['obs'] = obs
+                            loss = -self.model.compute_loss(batch)
                         else:
                             batch['obs'] = obs
                             loss = self.model.compute_loss(batch)
                         # loss = torch.nn.functional.mse_loss(predicted_action, predicted_action2)
                         # take the gradient of the loss with respect to the perturbation
+                        if self.epoch == 0:
+                            loss_per_epoch += loss.item()
+                            continue
                         loss.backward()
                         loss_per_epoch += loss.item()
                         # update the perturbation
@@ -402,7 +409,7 @@ class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
                 # print(f"Linf norm of the perturbation: {torch.norm(self.univ_pert, p=float('inf'))}")
                 print(f"L2 norm of the perturbation: {torch.norm(self.univ_pert, p=2)}")
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0:
+                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch > 0:
                     runner_log = env_runner.run(self.model, self.univ_pert, cfg)
                     # log all
                     step_log.update(runner_log)

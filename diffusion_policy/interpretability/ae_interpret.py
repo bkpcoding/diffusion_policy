@@ -50,6 +50,7 @@ def create_keypoint_animation(image_dataset, activations, output_path, object_co
 torch.backends.cudnn.enabled = False
 @hydra.main(config_path='../interpretability_configs', config_name='bet_image_ph_pick')
 # @hydra.main(config_path='../interpretability_configs', config_name='lstm_gmm_image_ph_pick')
+# @hydra.main(config_path='../interpretability_configs', config_name='vanilla_bc_image_ph_pick')
 def main(cfg):
     checkpoint = cfg.checkpoint
     task = cfg.task
@@ -192,7 +193,7 @@ def main(cfg):
     plt.scatter(perturbed_latents[:, 0], perturbed_latents[:, 1], c='b', label='Perturbed image dataset')
     plt.scatter(no_red_latents[:, 0], no_red_latents[:, 1], c='g', label='No red image dataset')
     plt.legend()
-    plt.savefig('/teamspace/studios/this_studio/bc_attacks/diffusion_policy/diffusion_policy/interpretability/latent_space_train2_retrained.png')
+    plt.savefig('/teamspace/studios/this_studio/bc_attacks/diffusion_policy/diffusion_policy/interpretability/latent_space_train0_untar0625_bet_smoothed.png')
 
 
 if __name__ == '__main__':

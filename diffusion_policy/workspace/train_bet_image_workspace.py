@@ -288,6 +288,9 @@ class TrainBETImageWorkspace(BaseWorkspace):
                 self.epoch += 1
 import dill
 import pickle 
+import torch.nn.functional as F
+from scipy.fft import fft2, ifft2
+import matplotlib.pyplot as plt
 
 class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
@@ -350,7 +353,7 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
         )
         print("Configuring environment runner")
         # configure env
-        # cfg.task.env_runner.n_envs = 2
+        cfg.task.env_runner.n_envs = 2
         env_runner: BaseImageRunner
         env_runner = hydra.utils.instantiate(
             cfg.task.env_runner,
@@ -369,7 +372,12 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
         self.model.to(device)
 
         # define the perturbation
-        self.univ_pert = torch.zeros((3, 84, 84)).to(device)
+        self.univ_pert = torch.zeros((1, 3, 84, 84)).to(device)
+        # define the perturbation to be random noise within epsilon
+        # self.univ_pert = torch.rand((1, 3, 84, 84)).to(device) * 2 * cfg.epsilon - cfg.epsilon
+        if cfg.retrain:
+            self.univ_pert = pickle.load(open(cfg.patch_path, 'rb'))
+            print(f"Loaded perturbation with shape {self.univ_pert.shape}")
         # save batch for sampling
         train_sampling_batch = None
 
@@ -385,6 +393,14 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
         # training loop
         print(f"Training for {cfg.training.num_epochs} epochs")
 
+        # Define a 3x3 box filter kernel
+        channels = 3
+        kernel_size = 5
+        ws = torch.ones((channels, 1, kernel_size, kernel_size)) /(kernel_size**2)
+        ws = ws.to(device)
+        eta = 100000
+        # self.adversarial_image = torch.zeros((512, 3, 84, 84)).to(device)
+
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with JsonLogger(log_path) as json_logger:
@@ -399,7 +415,8 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                         self.model.zero_grad()
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                        obs = batch['obs']
+                        original_obs = batch['obs'].copy()
+                        obs = batch['obs'].copy()
                         if batch['obs']['agentview_image'].shape[0] != cfg.dataloader.batch_size:
                             continue
                         obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
@@ -415,6 +432,13 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                         else:
                             batch['obs'] = obs
                             raw_loss, loss_components = self.model.compute_loss(batch)
+                            response_map = F.conv2d((obs[view][:, 1] - original_obs[view][:, 1]), ws, groups=3)
+                            reg_term = torch.sum(torch.abs(response_map))
+                            print(reg_term)
+                            raw_loss += eta * reg_term
+                            print(f"Loss after regularization: {raw_loss}")
+                            print(f"Mean and std of univ perturbation: {torch.mean(self.univ_pert)}, {torch.std(self.univ_pert)}")
+
                         # compute loss
                         loss = raw_loss
                         if self.epoch == 0:
@@ -424,12 +448,28 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                         loss_per_epoch += loss.item()
                         # update the perturbation
                         self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sum(obs[view].grad.sign(), dim=0)
+                        # self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sum(self.univ_pert.grad.sign(), dim=0)
                         # clip the perturbation
                         self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
                 print(f"Loss per epoch: {loss_per_epoch}")
                 if cfg.log:
                     wandb.log({"loss_per_epoch": loss_per_epoch, "epoch": self.epoch})
                 print(f"L2 norm of the perturbation: {torch.norm(self.univ_pert)}")
+                print(f"Shape of the perturbation: {self.univ_pert[0].shape}")
+                f_perturbation = fft2(self.univ_pert[0].squeeze(0).permute(1, 2, 0).cpu().detach().numpy())
+                # visualize the magnitude of the perturbation spectrum
+                plt.imshow(np.log(np.abs(f_perturbation)+1))
+                plt.title('Fourier Transform of the perturbation')
+                pert_save_path = os.path.join(os.path.dirname(cfg.checkpoint), f'fourier_pert_{cfg.epsilon}_epoch_{self.epoch}_{view}.png')
+                plt.savefig(pert_save_path)
+                smoothed_perturbation = F.conv2d(self.univ_pert, ws, groups=3)
+                print("shape of smoothed perturbation is ", smoothed_perturbation.shape)
+                # Visualize the smoothed magnitude spectrum
+                plt.imshow(smoothed_perturbation[0].squeeze(0).permute(1, 2, 0).cpu().detach().numpy())
+                plt.title('Smoothed Perturbation')
+                smooth_save_path = os.path.join(os.path.dirname(cfg.checkpoint), f'smoothed_fourier_pert_{cfg.epsilon}_epoch_{self.epoch}_{view}.png')
+                plt.savefig(smooth_save_path)
+                
 
                 # run rollout
                 if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch > 0:
@@ -440,15 +480,18 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                     print(f"Test mean score: {test_mean_score}")
                     if cfg.log:
                         wandb.log({"test_mean_score": test_mean_score, "epoch": self.epoch})
-                    if cfg.targeted:
-                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
+                    if cfg.retrain:
+                        patch_path = cfg.patch_path[:-4] + '_retrain.pkl'
+                    elif cfg.targeted:
+                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}_reg.pkl')
                     else:
-                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
+                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}_reg.pkl')
                     pickle.dump(self.univ_pert, open(patch_path, 'wb'))
                 self.epoch += 1
                 json_logger.log(step_log)
                 self.global_step += 1
-        wandb.finish()                
+        if cfg.log:
+            wandb.finish()  
 
 
 

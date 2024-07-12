@@ -461,10 +461,13 @@ class AdvPatchRobomimicImageRunner(BaseImageRunner):
             patch = torch.zeros((3, cfg.patch_size, cfg.patch_size), device=device, dtype=dtype)
         elif cfg.patch_type == 'universal_transparent':
             # load the patch from the patch_file numpy file
-            patch = np.load(cfg.patch_file)
+            patch = np.load(cfg.patch_file, allow_pickle=True)
             # convert the patch to torch tensor and transfer to device
-            patch = torch.from_numpy(patch).to(device=device)
-            patch = self.patch_forward(patch, cfg)
+            if isinstance(patch, np.ndarray):
+                patch = torch.from_numpy(patch).to(device=device)
+                patch = self.patch_forward(patch, cfg)
+            else:
+                pass
         else:
             raise ValueError("Invalid patch type")
         
@@ -555,7 +558,7 @@ class AdvPatchRobomimicImageRunner(BaseImageRunner):
         _ = env.reset()
 
         # render side by side video
-        render_side_by_side_video(observations, os.path.join(self.output_dir, 'adversarial_universal_transparent_patch_video.mp4'), num_samples=5, cfg=cfg)
+        # render_side_by_side_video(observations, os.path.join(self.output_dir, 'adversarial_universal_transparent_patch_video.mp4'), num_samples=5, cfg=cfg)
         # log
         max_rewards = collections.defaultdict(list)
         log_data = dict()
