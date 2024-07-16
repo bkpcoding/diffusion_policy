@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, ArtistAnimation
 from pathlib import Path
 
+
 def create_env(env_meta, shape_meta, enable_render=True):
     modality_mapping = collections.defaultdict(list)
     for key, attr in shape_meta['obs'].items():
@@ -41,7 +42,6 @@ def create_env(env_meta, shape_meta, enable_render=True):
         use_image_obs=enable_render, 
     )
     return env
-
 
 class RobomimicImageRunner(BaseImageRunner):
     """
@@ -260,6 +260,9 @@ class RobomimicImageRunner(BaseImageRunner):
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
+        observations = []
+        # randomly select envs to visualize from the n_envs
+        vis_envs = np.random.choice(n_envs, cfg.n_vis, replace=False)
 
         for chunk_idx in range(n_chunks):
             start = chunk_idx * n_envs
@@ -329,7 +332,7 @@ class RobomimicImageRunner(BaseImageRunner):
                 obs, reward, done, info = env.step(env_action)
                 done = np.all(done)
                 past_action = action
-
+                observations.append(obs['robot0_eye_in_hand_image'][vis_envs])
                 # update pbar
                 pbar.update(action.shape[1])
             pbar.close()
@@ -339,10 +342,34 @@ class RobomimicImageRunner(BaseImageRunner):
             all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
         # clear out video buffer
         _ = env.reset()
-        
         # log
         max_rewards = collections.defaultdict(list)
         log_data = dict()
+        # visualize the video and save to wandb
+        if cfg.save_video and cfg.log:
+            for i in range(cfg.n_vis):
+                ims = []
+                fig, ax = plt.subplots()
+                for j in range(len(observations)):
+                    try:
+                        im = observations[j][i][1].transpose(1, 2, 0)
+                    except IndexError:
+                        im = observations[j][i][0].transpose(1, 2, 0)
+                    ims.append([ax.imshow(im)])
+
+                save_path = Path(cfg.patch_path).parent
+                save_path = save_path.joinpath(f'vis_{i}.gif')
+                print(f"Saving video to {save_path}")
+
+                if os.path.exists(save_path):
+                    os.remove(save_path)
+
+                ani = ArtistAnimation(fig, ims, interval=100, blit=True, repeat_delay=1000)
+                ani.save(str(save_path), writer='pillow')
+                plt.close(fig)
+                
+                wandb.log({f'vis_{i}': wandb.Image(str(save_path))})
+            
         # results reported in the paper are generated using the commented out line below
         # which will only report and average metrics from first n_envs initial condition and seeds
         # fortunately this won't invalidate our conclusion since
@@ -352,6 +379,7 @@ class RobomimicImageRunner(BaseImageRunner):
         # for i in range(len(self.env_fns)):
         # and comment out this line
         for i in range(n_inits):
+            print(f"Saving video to {all_video_paths[i]}")
             seed = self.env_seeds[i]
             prefix = self.env_prefixs[i]
             max_reward = np.max(all_rewards[i])
