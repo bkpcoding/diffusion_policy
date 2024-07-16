@@ -91,7 +91,7 @@ optimizer:
 
 training:
   device: "cuda:0"
-  seed: 1024
+  seed: 42
   debug: False
   resume: True
   # optimization

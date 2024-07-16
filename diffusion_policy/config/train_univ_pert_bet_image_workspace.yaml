@@ -1,10 +1,15 @@
 defaults:
   - _self_
   - task: lift_image
+checkpoints: 
+    train0: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train0/checkpoints/epoch=0050-test_mean_score=0.944.ckpt'
+    train1: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train1/checkpoints/epoch=0050-test_mean_score=0.860.ckpt'
+    train2: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train2/checkpoints/epoch=0200-test_mean_score=0.833.ckpt'
+    train3: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train3/checkpoints/epoch=0350-test_mean_score=0.929.ckpt'
+checkpoint: ${checkpoints.train3}
 
 name: train_bet_image
 _target_: diffusion_policy.workspace.train_bet_image_workspace.TrainBETUniPertImageWorkspaceDP
-checkpoint: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train0/checkpoints/epoch=0050-test_mean_score=0.944.ckpt'
 # checkpoint: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train1/checkpoints/epoch=0050-test_mean_score=0.860.ckpt'
 
 epsilon: 0.0625
@@ -17,8 +22,11 @@ clip_min: 0
 clip_max: 1
 targeted: False
 perturbations: [0.15, 0.15, 0, 0, 0, 0, 0]
-log: False
-
+log: True 
+eta: 10
+kernel_size: 3
+lambda_feat: 1000
+alpha: 0.5
 retrain: False
 patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train0/checkpoints/untar_pert_0.0625_epoch_10_mean_score_0.04_robot0_eye_in_hand_image.pkl'
 
@@ -84,7 +92,7 @@ policy:
   n_action_steps: ${n_action_steps}
 
 dataloader:
-  batch_size: 512
+  batch_size: 256
   num_workers: 10
   shuffle: True
   pin_memory: True
@@ -110,13 +118,13 @@ training:
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 50
-  num_epochs: 10
+  num_epochs: 31 
   gradient_accumulate_every: 1
   grad_norm_clip: 1.0
   enable_normalizer: True
   # training loop control
   # in epochs
-  rollout_every: 1
+  rollout_every: 5
   checkpoint_every: 50
   val_every: 5
   sample_every: 10

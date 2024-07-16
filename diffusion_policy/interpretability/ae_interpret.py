@@ -115,6 +115,8 @@ def main(cfg):
         patch = torch.load(cfg.patch_path)
     if type(patch) == torch.Tensor:
         patch = patch.cpu().numpy()
+    if len(patch.shape) == 5:
+        patch = patch[0][1]
     print(f"Patch shape: {patch.shape}, image shape: {image_dataset[0].shape}")
     print(f"L2 norm of the patch: {np.linalg.norm(patch)}")
     # apply the patch to the image dataset
@@ -193,9 +195,8 @@ def main(cfg):
     plt.scatter(perturbed_latents[:, 0], perturbed_latents[:, 1], c='b', label='Perturbed image dataset')
     plt.scatter(no_red_latents[:, 0], no_red_latents[:, 1], c='g', label='No red image dataset')
     plt.legend()
-    plt.savefig('/teamspace/studios/this_studio/bc_attacks/diffusion_policy/diffusion_policy/interpretability/latent_space_train0_untar0625_bet_smoothed.png')
+    plt.savefig('/teamspace/studios/this_studio/bc_attacks/diffusion_policy/diffusion_policy/interpretability/latent_space_train0_untar0625_bet_regularized_ker3_train3.png')
 
 
 if __name__ == '__main__':
     main()
-

@@ -60,7 +60,7 @@ def init_wandb(checkpoint, cfg, attack, view):
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_adversarial.yaml')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='vanilla_bc_image_ph_pick_pgd_adversarial.yaml')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_adversarial.yaml')
-@hydra.main(config_path='diffusion_policy/eval_configs', config_name='bet_image_ph_pick_pgd_adversarial.yaml')
+@hydra.main(config_path='diffusion_policy/eval_configs', config_name='bet_image_ph_pick_adversarial.yaml')
 def main(cfg):
     checkpoint = cfg.checkpoint
     task = cfg.task
@@ -88,7 +88,8 @@ def main(cfg):
         config_path = 'diffusion_policy/eval_configs'
         # config_name = 'diffusion_policy_image_ph_pick_pgd_adversarial'
         # config_name = 'vanilla_bc_ph_pick_adversarial_patch'
-        config_name = 'ibc_image_ph_pick_adversarial'
+        # config_name = 'ibc_image_ph_pick_adversarial'
+        config_name = 'lstm_gmm_image_ph_pick_adversarial'
         # wandb.log({"xloc": cfg.x_loc, "yloc": cfg.y_loc, "patch_size": cfg.patch_size})
         # config_name = 'lstm_gmm_image_ph_pick_pgd_adversarial'
         config_file_path = to_absolute_path(f"{config_path}/{config_name}.yaml")
@@ -137,13 +138,17 @@ def main(cfg):
     device = torch.device(device)
     policy.to(device)
     policy.eval()
-    print(policy)
 
     env_runner = hydra.utils.instantiate(
         cfg_loaded.task.env_runner,
         output_dir=output_dir)
     if attack and cfg.attack_type == 'patch':
         patch = pickle.load(open(cfg.patch_path, 'rb'))
+        print("Shape of the patch: ", patch.shape)
+        patch[0, :] = torch.ones_like(patch[0, :])
+        # patch[0, 0] = torch.ones_like(patch[0, 0])
+        # patch[0, 1] = torch.ones_like(patch[0, 1])
+        print(patch[0])
         runner_log = env_runner.run(policy, adversarial_patch=patch, cfg=cfg)
     elif attack:
         runner_log = env_runner.run(policy, cfg.epsilon, cfg)

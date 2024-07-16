@@ -3,7 +3,7 @@ checkpoints:
     train1: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_1/checkpoints/epoch=0300-test_mean_score=1.000.ckpt'
     train2: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_2/checkpoints/epoch=0300-test_mean_score=1.000.ckpt'
 
-checkpoint: ${checkpoints.train0}
+checkpoint: ${checkpoints.train2}
 
 task: 'lift_ph'
 dataset_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/robomimic/datasets/lift/ph/image.hdf5'
