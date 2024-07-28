@@ -5,7 +5,11 @@ defaults:
 name: train_robomimic_image
 # _target_: diffusion_policy.workspace.train_robomimic_image_workspace.TrainRobomimicImageWorkspace
 _target_: diffusion_policy.workspace.train_robomimic_image_workspace.TrainRobomimicUniPertImageWorkspace
-checkpoint: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vanilla_bc/train_0/checkpoints/epoch=0500-test_mean_score=1.000.ckpt
+checkpoints: 
+    train0: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vanilla_bc/train_0/checkpoints/epoch=0500-test_mean_score=1.000.ckpt'
+    train1: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vanilla_bc/train_1/checkpoints/epoch=0100-test_mean_score=1.000.ckpt'
+    train2: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vanilla_bc/train_2/checkpoints/epoch=0100-test_mean_score=1.000.ckpt'
+checkpoint: ${checkpoints.train0}
 
 epsilon: 0.0625
 epsilon_step: 0.01
@@ -24,9 +28,14 @@ n_latency_steps: 0
 dataset_obs_steps: *horizon
 past_action_visible: False
 keypoint_visible_rate: 1.0
-targeted: True
+targeted: False
 perturbations: [0.25, 0.25, 0, 0, 0, 0, 0]
-log: True
+gamma: 1.0
+log: False
+save_video: False
+n_vis: 3
+switch: 15 # after how many epoch to switch from classification loss to mse loss
+
 
 policy:
   _target_: diffusion_policy.policy.robomimic_image_policy.RobomimicImagePolicy
@@ -39,7 +48,7 @@ policy:
   crop_shape: [76,76]
 
 dataloader:
-  batch_size: 512
+  batch_size: 256
   num_workers: 10
   shuffle: True
   pin_memory: True
@@ -58,10 +67,10 @@ training:
   debug: False
   resume: True
   # optimization
-  num_epochs: 50
+  num_epochs: 100
   # training loop control
   # in epochs
-  rollout_every: 5
+  rollout_every: 10
   checkpoint_every: 100
   val_every: 100
   sample_every: 100

@@ -31,7 +31,8 @@ class BETImagePolicy(BaseImagePolicy):
             n_obs_steps,
             crop_shape=(76, 76),
             eval_fixed_crop=True,
-            obs_encoder_group_norm=True):
+            obs_encoder_group_norm=True,
+            **kwargs):
         super().__init__()
     
         self.shape_meta = shape_meta
@@ -71,7 +72,8 @@ class BETImagePolicy(BaseImagePolicy):
             algo_name='bc',
             hdf5_type='image',
             task_name='lift',
-            dataset_type='ph')
+            dataset_type='ph',
+            pretrained_backbone=True,)
         
         
         with config.unlocked():
@@ -93,7 +95,6 @@ class BETImagePolicy(BaseImagePolicy):
         # init global state
         ObsUtils.initialize_obs_utils_with_config(config)
 
-        # load model
         policy: PolicyAlgo = algo_factory(
                 algo_name=config.algo_name,
                 config=config,
@@ -101,9 +102,9 @@ class BETImagePolicy(BaseImagePolicy):
                 ac_dim=action_dim,
                 device='cpu',
             )
-
+        print(f"Policy config: {config}")
         self.obs_encoder = obs_encoder = policy.nets['policy'].nets['encoder'].nets['obs']
-        
+
         if obs_encoder_group_norm:
             # replace batch norm with group norm
             replace_submodules(
@@ -147,7 +148,7 @@ class BETImagePolicy(BaseImagePolicy):
         if return_latent:
             return {'latent': latent}
         action = self.action_ae.decode_actions(latent, nobs_features)
-        return {'action': action}
+        return {'action': action, 'features': nobs_features}
 
     # ========= training  ============
     def set_normalizer(self, normalizer):
@@ -185,7 +186,7 @@ class BETImagePolicy(BaseImagePolicy):
                     learning_rate=learning_rate, 
                     betas=tuple(betas))
 
-    def compute_loss(self, batch):
+    def compute_loss(self, batch, return_nobs_feat=False):
          # normalize input
         assert 'valid_mask' not in batch
         nobs = self.normalizer.normalize(batch['obs'])
@@ -208,4 +209,6 @@ class BETImagePolicy(BaseImagePolicy):
             target_latents=latent,
             return_loss_components=True,
         )
+        if return_nobs_feat:
+            return loss, loss_components, nobs_features
         return loss, loss_components

@@ -154,6 +154,10 @@ class TrainBETImageWorkspace(BaseWorkspace):
             for local_epoch_idx in range(cfg.training.num_epochs):
                 step_log = dict()
                 # ========= train for this epoch ==========
+                if cfg.training.freeze_encoder:
+                    self.policy.obs_encoder.eval()
+                    self.policy.obs_encoder.requires_grad_(False)
+                    print("Freezing encoder")
                 train_losses = list()
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
@@ -207,7 +211,7 @@ class TrainBETImageWorkspace(BaseWorkspace):
 
                 # run rollout
                 if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch > 0:
-                    runner_log = env_runner.run(policy)
+                    runner_log = env_runner.run(policy, cfg=cfg)
                     # log all
                     step_log.update(runner_log)
 
@@ -372,7 +376,7 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
         if cfg.log:
             wandb.init(
                 project="regularized_universal_perturbation_test",
-                name=f"BET_{cfg.epsilon}_targeted_{cfg.targeted}_view_{view}_with_smooth_reg_with_cosine"
+                name=f"BET_{cfg.epsilon}_targeted_{cfg.targeted}_view_{view}_orig_obs"
             )
             wandb.log({"epsilon": cfg.epsilon, "epsilon_step": cfg.epsilon_step, "targeted": cfg.targeted, "view": view})        # configure checkpoint
         self.model.eval()
@@ -390,6 +394,9 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
 
         # define the perturbation
         self.univ_pert = torch.zeros((1, 2, 3, 84, 84)).to(device)
+        # add some initial noise to the self.univ_pert for untargeted attacks
+        if cfg.targeted == False:
+            self.univ_pert += torch.rand((1, 2, 3, 84, 84)).to(device) * 2 * cfg.epsilon_step - cfg.epsilon_step
         # define the perturbation to be random noise within epsilon
         # self.univ_pert = torch.rand((1, 3, 84, 84)).to(device) * 2 * cfg.epsilon - cfg.epsilon
         if cfg.retrain:
@@ -421,6 +428,9 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
 
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
+        To = self.model.n_obs_steps
+        switch = cfg.switch
+        gradients = {}
         with JsonLogger(log_path) as json_logger:
             for local_epoch_idx in range(cfg.training.num_epochs):
                 step_log = dict()
@@ -438,31 +448,57 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         original_obs = batch['obs'].copy()
-                        raw_loss_orig, loss_components_orig = self.model.compute_loss(batch)
-                        representation_dict_orig = self.model.obs_encoder.representation_dict
+                        # with torch.no_grad():
+                        #     nobs_clean = self.model.normalizer.normalize(batch['obs'])
+                        #     this_nobs_clean = dict_apply(nobs_clean, 
+                        #         lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:]))
+                        #     nobs_features_clean = self.model.obs_encoder(this_nobs_clean)
+                        #     # raw_loss_orig, loss_components_orig, nobs_features_clean = self.model.compute_loss(batch, return_nobs_feat=True)
+                        #     # representation_dict_orig = self.model.obs_encoder.representation_dict
                         obs = batch['obs'].copy()
-                        if batch['obs']['agentview_image'].shape[0] != cfg.dataloader.batch_size:
-                            continue
+                        # if batch['obs']['agentview_image'].shape[0] != cfg.dataloader.batch_size:
+                        #     continue
                         obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
                         obs[view] = obs[view] + self.univ_pert
                         # clamp the observation to be between clip_min and clip_max
                         obs[view] = torch.clamp(obs[view], cfg.clip_min, cfg.clip_max)
                         obs[view].requires_grad = True
+                        batch_cp = batch.copy()
                         if cfg.targeted:
-                            batch['obs'] = obs
-                            batch['action'] = batch['action'].to(device) + torch.tensor(cfg.perturbations, device =device)
-                            raw_loss, loss_components = self.model.compute_loss(batch)
+                            with torch.no_grad():
+                                predicted_action = self.model.predict_action(original_obs)['action']
+                            batch_cp['obs'] = obs
+                            # batch_cp['action'] = predicted_action.to(device) + torch.tensor(cfg.perturbations, device =device)
+                            batch_cp['action'] = batch['action'] + torch.tensor(cfg.perturbations, device =device)
+                            # target_action = predicted_action + torch.tensor(cfg.perturbations, device =device)
+                            # predicted_action = self.model.predict_action(obs)['action']
+                            raw_loss, loss_components = self.model.compute_loss(batch_cp)
+                            # if self.epoch < switch:
+                            #     raw_loss = -loss_components['class']
+                            # else:
+                            #     raw_loss = -loss_components['offset']
                             raw_loss = -raw_loss
+                            # raw_loss = -torch.nn.MSELoss()(predicted_action, target_action)
                         else:
-                            batch['obs'] = obs
+                            batch_cp['obs'] = obs
+                            # nobs_pert = self.model.normalizer.normalize(batch['obs'])
+                            # this_nobs_pert = dict_apply(nobs_pert,
+                            #     lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:]))
+                            # nobs_features_pert = self.model.obs_encoder(this_nobs_pert)
+                            # print(nobs_features_clean.shape, nobs_features_pert.shape)
+                            # loss = torch.nn.MSELoss()(nobs_features_clean, nobs_features_pert)
                             # print(batch['obs'][view].shape)
-                            raw_loss, loss_components = self.model.compute_loss(batch)
-                            representation_dict_pert = self.model.obs_encoder.representation_dict
-                            for layer in self.layers:
-                                representation_orig = representation_dict_orig[layer]
-                                representation_pert = representation_dict_pert[layer]
+                            raw_loss, loss_components = self.model.compute_loss(batch_cp)
+                            # raw_loss, loss_components, nobs_features_pert = self.model.compute_loss(batch, return_nobs_feat=True)
+                            # class_loss = loss_components['class']
+                            # distance = torch.nn.MSELoss()(nobs_features_clean, nobs_features_pert)
+                            # print(raw_loss, loss_components)
+                            # representation_dict_pert = self.model.obs_encoder.representation_dict
+                            # for layer in self.layers:
+                            #     representation_orig = representation_dict_orig[layer]
+                            #     representation_pert = representation_dict_pert[layer]
                                 # calculate the cosine similarity between the feature maps
-                                distance += F.cosine_similarity(representation_orig, representation_pert, dim=1).mean()
+                                # distance += F.cosine_similarity(representation_orig, representation_pert, dim=1).mean()
                                 # normalize the feature maps to [0, 1] based on min-max normalization
                                 # print(torch.min(representation_orig), torch.max(representation_orig))
                                 # print(torch.min(representation_pert), torch.max(representation_pert))
@@ -476,17 +512,19 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                                 # distance += torch.norm(orig_feat - pert_feat, p = 2)
                                 # print(f"Distance between original and perturbed feature maps: {distance}")
                             # print(f"Distance between original and perturbed feature maps: {distance}")
-                            if cfg.log:
-                                wandb.log({"distance": distance.item()})
-                            response_map = F.conv2d((obs[view][:, 1] - original_obs[view][:, 1]), ws, groups=3)
-                            reg_term = torch.sum(torch.abs(response_map))
+                            # if cfg.log:
+                            #     wandb.log({"distance": distance.item()})
+                            # response_map = F.conv2d((obs[view][:, 1] - original_obs[view][:, 1]), ws, groups=3)
+                            # reg_term = torch.sum(torch.abs(response_map))
                             # print(reg_term)
-                            raw_loss += eta * reg_term + cfg.lambda_feat * distance
+                            # loss += raw_loss + eta * reg_term + cfg.lambda_feat * distance
+                            # class_loss += eta * reg_term
                             # raw_loss += cfg.lambda_feat * distance
                             # raw_loss += eta * reg_term
                             # print(f"Loss after regularization: {raw_loss}")
                             print(f"Mean and std of univ perturbation: {torch.mean(self.univ_pert)}, {torch.std(self.univ_pert)}")
                         # compute loss
+                        # loss = distance
                         loss = raw_loss
                         if self.epoch == 0:
                             loss_per_epoch += loss.item()
@@ -495,12 +533,21 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                         loss_per_epoch += loss.item()
                         # update the perturbation
                         total_grad += obs[view].grad.sum(dim=0, keepdim=True)
+                        # log the magnitude of the gradient
+                        if cfg.log:
+                            wandb.log({"gradient_magnitude": torch.norm(obs[view].grad).item()})
+                            # log the loss components
+                            for key, value in loss_components.items():
+                                wandb.log({key: value.item()})
                 print(total_grad.shape, total_grad)
+                gradients[self.epoch] = total_grad
                 print(f"Loss per epoch: {loss_per_epoch}")
                 self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sign(total_grad)
                 self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
                 if cfg.log:
-                    wandb.log({"loss_per_epoch": loss_per_epoch, "epoch": self.epoch})
+                    wandb.log({"loss_per_epoch": loss_per_epoch, "epoch": self.epoch, 
+                               "mean_perturbation": torch.mean(self.univ_pert).item(), "std_perturbation": torch.std(self.univ_pert).item(),
+                               "L2_norm_perturbation": torch.norm(self.univ_pert).item()})
                 print(f"L2 norm of the perturbation: {torch.norm(self.univ_pert)}")
                 print(f"Shape of the perturbation: {self.univ_pert.shape}")
                 print(f"Mean and std of the perturbation: {torch.mean(self.univ_pert)}, {torch.std(self.univ_pert)}")
@@ -520,26 +567,32 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                 
 
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch > 0:
+                if (self.epoch % cfg.training.rollout_every) == 0:
                     runner_log = env_runner.run(self.model, self.univ_pert, cfg)
                     # log all
                     step_log.update(runner_log)
                     test_mean_score= runner_log['test/mean_score']
                     print(f"Test mean score: {test_mean_score}")
+                    save_name = f'pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}_step_loss.pkl'
                     if cfg.log:
                         wandb.log({"test_mean_score": test_mean_score, "epoch": self.epoch})
                     if cfg.retrain:
                         patch_path = cfg.patch_path[:-4] + '_retrain.pkl'
                     elif cfg.targeted:
-                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}_ker_{cfg.kernel_size}_with_reg{cfg.eta}_with_cos_61relu.pkl')
-                        # patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
+                        # patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}_ker_{cfg.kernel_size}_with_reg{cfg.eta}.pkl')
+                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_{save_name}')
                     else:
-                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}_ker_{cfg.kernel_size}_with_reg{cfg.eta}_with_cos_61relu.pkl')
                         # patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}_ker_{cfg.kernel_size}_with_reg{cfg.eta}.pkl')
+                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_{save_name}')
                     pickle.dump(self.univ_pert, open(patch_path, 'wb'))
                 self.epoch += 1
                 json_logger.log(step_log)
                 self.global_step += 1
+        if cfg.targeted:
+            gradients_path = os.path.join(os.path.dirname(cfg.checkpoint), f'gradients_tar_{save_name}')
+        else:
+            gradients_path = os.path.join(os.path.dirname(cfg.checkpoint), f'gradients_untar_{save_name}')
+        pickle.dump(gradients, open(gradients_path, 'wb'))
         if cfg.log:
             wandb.finish()
 

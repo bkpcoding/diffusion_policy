@@ -21,12 +21,13 @@ keypoint_visible_rate: 1.0
 policy:
   _target_: diffusion_policy.policy.robomimic_image_policy.RobomimicImagePolicy
   shape_meta: ${shape_meta}
-  algo_name: bc
+  algo_name: bc_rnn
   obs_type: image
   # oc.select resolver: key, default
   task_name: ${oc.select:task.task_name,lift}
   dataset_type: ${oc.select:task.dataset_type,ph}
   crop_shape: [76,76]
+  use_resnet50: True
 
 dataloader:
   batch_size: 64
@@ -43,7 +44,7 @@ val_dataloader:
   persistent_workers: False
 
 training:
-  device: "cuda:0"
+  device: "cpu"
   seed: 1023
   debug: False
   resume: True
@@ -62,7 +63,7 @@ training:
   tqdm_interval_sec: 1.0
 
 logging:
-  project: BC_Evaluation
+  project: lstm_gmm_image_policy
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}_${training.seed}_${policy.algo_name}

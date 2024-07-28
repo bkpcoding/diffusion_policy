@@ -18,7 +18,8 @@ class RobomimicImagePolicy(BaseImagePolicy):
             obs_type='image',
             task_name='square',
             dataset_type='ph',
-            crop_shape=(76,76)
+            crop_shape=(76,76),
+            use_resnet50=False,
         ):
         super().__init__()
 
@@ -51,7 +52,9 @@ class RobomimicImagePolicy(BaseImagePolicy):
             algo_name=algo_name,
             hdf5_type=obs_type,
             task_name=task_name,
-            dataset_type=dataset_type)
+            dataset_type=dataset_type,
+            resnet50=use_resnet50,
+            )
 
         
         with config.unlocked():
@@ -74,6 +77,7 @@ class RobomimicImagePolicy(BaseImagePolicy):
         ObsUtils.initialize_obs_utils_with_config(config)
 
         # load model
+        print(f"Policy config: {config}")
         model: PolicyAlgo = algo_factory(
                 algo_name=config.algo_name,
                 config=config,
@@ -94,15 +98,16 @@ class RobomimicImagePolicy(BaseImagePolicy):
         super().to(*args,**kwargs)
     
     # =========== inference =============
-    def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def predict_action(self, obs_dict: Dict[str, torch.Tensor], cfg_activation=None) -> Dict[str, torch.Tensor]:
         nobs_dict = self.normalizer(obs_dict)
         robomimic_obs_dict = dict_apply(nobs_dict, lambda x: x[:,0,...])
         robomimic_obs_dict = dict_apply(robomimic_obs_dict, lambda x: x.to(self.model.device))
-        naction = self.model.get_action(robomimic_obs_dict)
+        naction = self.model.get_action(robomimic_obs_dict, cfg_activation=cfg_activation) if cfg_activation is not None else self.model.get_action(robomimic_obs_dict)
         action = self.normalizer['action'].unnormalize(naction)
         # (B, Da)
         result = {
-            'action': action[:,None,:] # (B, 1, Da)
+            'action': action[:,None,:], # (B, 1, Da),
+            'features': self.model.nets["policy"].enc_outputs,
         }
         return result
 

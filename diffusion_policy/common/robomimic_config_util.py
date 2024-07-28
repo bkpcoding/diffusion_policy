@@ -11,7 +11,9 @@ def get_robomimic_config(
         algo_name='bc_rnn', 
         hdf5_type='low_dim', 
         task_name='square', 
-        dataset_type='ph'
+        dataset_type='ph',
+        pretrained_backbone=False,
+        resnet50 = False,
     ):
     base_dataset_dir = '/tmp/null'
     filter_key = None
@@ -24,7 +26,10 @@ def get_robomimic_config(
     algo_config_name = "bc" if algo_name == "bc_rnn" else algo_name
     config = config_factory(algo_name=algo_config_name)
     # turn into default config for observation modalities (e.g.: low-dim or rgb)
-    config = modifier_for_obs(config)
+    if resnet50:
+        config=  modifier_for_obs(config, pretrained_backbone, resnet50)
+    else:
+        config = modifier_for_obs(config, pretrained_backbone)
     # add in config based on the dataset
     config = modify_config_for_dataset(
         config=config, 

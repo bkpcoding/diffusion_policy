@@ -297,6 +297,11 @@ class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
             output_dir=self.output_dir)
         assert isinstance(env_runner, BaseImageRunner)
 
+        # self.layers = ['0.nets.4.0.conv1']
+        # self.layers = ['0.nets.1']
+        # self.layers = ['0.nets.2.1.conv1']
+        self.layers = ['0.nets.4.1']
+
 
         if cfg.training.debug:
             cfg.training.num_epochs = 2
@@ -318,18 +323,28 @@ class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
         # training loop for the universal perturbation
         self.univ_pert = torch.zeros((3, 84, 84)).to(device)
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
+        gradients = {}
+        cfg_activation = {}
         with JsonLogger(log_path) as json_logger:
             for local_epoch_idx in range(cfg.training.num_epochs):
                 step_log = dict()
                 # ========= train for this epoch ==========
                 train_losses = list()
                 loss_per_epoch = 0
+                total_grad = torch.zeros((1, 1, 3, 84, 84)).to(device)
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
                         self.model.zero_grad()
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                        orig_obs = batch['obs'].copy()
+                        cfg_activation['modify_act'] = False
+                        with torch.no_grad():
+                            prediction2 = self.model.predict_action(orig_obs, cfg_activation=cfg_activation)
+                            predicted_action2 = prediction2['action'].to(device)
+                            predicted_features2 = prediction2['features'].to(device)
+                            representation_dict_orig = self.model.nets['policy'].nets['encoder'].nets['obs'].representation_dict
                         obs = batch['obs'].copy()
                         # apply the patch the view
                         obs[view] = obs[view] + self.univ_pert
@@ -338,16 +353,20 @@ class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
                         obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
                         # set the requires_grad to true
                         obs[view].requires_grad = True
-                        predicted_action = self.model.predict_action(obs)['action'].to(device)
-                        with torch.no_grad():
-                            predicted_action2 = self.model.predict_action(batch['obs'])['action'].to(device)
+                        cfg_activation['modify_act'] = False
+                        cfg_activation['gamma'] = cfg.gamma
+                        cfg_activation['orig_act'] = representation_dict_orig[self.layers[0]]
+                        prediction = self.model.predict_action(obs, cfg_activation=cfg_activation)
+                        predicted_action = prediction['action'].to(device)
+                        predicted_features = prediction['features'].to(device)
                         if cfg.targeted:
                             # batch['action'] = batch['action'] + torch.tensor(cfg.perturbations).to(device)
                             target_action = predicted_action2 + torch.tensor(cfg.perturbations).to(device)
                             loss = -torch.nn.functional.mse_loss(predicted_action, target_action)
                         else:
                             # loss = torch.nn.functional.mse_loss(predicted_action, batch['action'])
-                            loss = torch.nn.functional.mse_loss(predicted_action, predicted_action2)
+                            # loss = torch.nn.functional.mse_loss(predicted_action, predicted_action2)
+                            loss = torch.nn.functional.mse_loss(predicted_features, predicted_features2)
                         # loss = torch.nn.functional.mse_loss(predicted_action, predicted_action2)
                         # take the gradient of the loss with respect to the perturbation
                         if self.epoch == 0:
@@ -355,17 +374,21 @@ class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
                             continue
                         loss.backward()
                         loss_per_epoch += loss.item()
+                        total_grad += obs[view].grad.sum(dim=0, keepdim=True)
                         # update the perturbation
-                        self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sum(obs[view].grad.sign(), dim=0)
+                        # self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sum(obs[view].grad.sign(), dim=0)
                         # clip the perturbation
-                        self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
+                        # self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
+                gradients[self.epoch] = total_grad
+                self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sign(total_grad)
+                self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
                 print(f"Loss for {self.epoch}: {loss_per_epoch}")
                 if cfg.log:
                     wandb.log({"loss": loss_per_epoch, "epoch": self.epoch})
                 # print(f"Linf norm of the perturbation: {torch.norm(self.univ_pert, p=float('inf'))}")
                 print(f"L2 norm of the perturbation: {torch.norm(self.univ_pert, p=2)}")
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch != 0:
+                if (self.epoch % cfg.training.rollout_every) == 0:
                     runner_log = env_runner.run(self.model, self.univ_pert, cfg)
                     # log all
                     step_log.update(runner_log)
@@ -375,11 +398,13 @@ class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
                         wandb.log({"test_mean_score": test_mean_score, "epoch": self.epoch})
                     # save the patch
                     if cfg.targeted:
-                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
+                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}_feature_dist.pkl')
                     else:
-                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
+                        patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}_feature_dist.pkl')
                     pickle.dump(self.univ_pert, open(patch_path, 'wb'))
                 self.epoch += 1
+        gradients_path = os.path.join(os.path.dirname(cfg.checkpoint), f'gradients_untar_pert_{cfg.epsilon}_{cfg.gamma}_feature_dist.pkl')
+        pickle.dump(gradients, open(gradients_path, 'wb'))
         wandb.finish()
 
 import dill
@@ -458,12 +483,14 @@ class TrainRobomimicUniPertImageWorkspaceRNN(BaseWorkspace):
         # training loop for the universal perturbation
         self.univ_pert = torch.zeros((3, 84, 84)).to(device)
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
+        gradients = {}
         with JsonLogger(log_path) as json_logger:
             for local_epoch_idx in range(cfg.training.num_epochs):
                 step_log = dict()
                 # ========= train for this epoch ==========
                 train_losses = list()
                 loss_per_epoch = 0
+                total_grad = torch.zeros((1, 1, 3, 84, 84)).to(device)
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
@@ -496,10 +523,10 @@ class TrainRobomimicUniPertImageWorkspaceRNN(BaseWorkspace):
                         # take the gradient of the loss with respect to the perturbation
                         loss.backward()
                         loss_per_epoch += loss.item()
-                        # update the perturbation
-                        self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sum(obs[view].grad.sign(), dim=0)
-                        # clip the perturbation
-                        self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
+                        total_grad += obs[view].grad.sum(dim=0, keepdim=True)
+                gradients[self.epoch] = total_grad
+                self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sign(total_grad)
+                self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
                 print(f"Loss for {self.epoch}: {loss_per_epoch}")
                 if cfg.log:
                     wandb.log({"loss": loss_per_epoch, "epoch": self.epoch})
@@ -521,6 +548,8 @@ class TrainRobomimicUniPertImageWorkspaceRNN(BaseWorkspace):
                         patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
                     pickle.dump(self.univ_pert, open(patch_path, 'wb'))
                 self.epoch += 1
+        gradients_path = os.path.join(os.path.dirname(cfg.checkpoint), f'gradients_untar_pert_{cfg.epsilon}.pkl')
+        pickle.dump(gradients, open(gradients_path, 'wb'))
         wandb.finish()
 
 class TrainRobomimicUniPertImageWorkspaceIBC(BaseWorkspace):
@@ -595,12 +624,14 @@ class TrainRobomimicUniPertImageWorkspaceIBC(BaseWorkspace):
         # training loop for the universal perturbation
         self.univ_pert = torch.zeros((3, 84, 84)).to(device)
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
+        gradients = {}
         with JsonLogger(log_path) as json_logger:
             for local_epoch_idx in range(cfg.training.num_epochs):
                 step_log = dict()
                 # ========= train for this epoch ==========
                 train_losses = list()
                 loss_per_epoch = 0
+                total_grad = torch.zeros((1, 1, 3, 84, 84)).to(device)
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
@@ -631,10 +662,10 @@ class TrainRobomimicUniPertImageWorkspaceIBC(BaseWorkspace):
                         # take the gradient of the loss with respect to the perturbation
                         loss.backward()
                         loss_per_epoch += loss.item()
-                        # update the perturbation
-                        self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sum(obs[view].grad.sign(), dim=0)
-                        # clip the perturbation
-                        self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
+                        total_grad += obs[view].grad.sum(dim=0, keepdim=True)
+                gradients[self.epoch] = total_grad
+                self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sign(total_grad)
+                self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
                 print(f"Loss for {self.epoch}: {loss_per_epoch}")
                 if cfg.log:
                     wandb.log({"loss": loss_per_epoch, "epoch": self.epoch})
@@ -656,6 +687,8 @@ class TrainRobomimicUniPertImageWorkspaceIBC(BaseWorkspace):
                         patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}.pkl')
                     pickle.dump(self.univ_pert, open(patch_path, 'wb'))
                 self.epoch += 1
+        gradients_path = os.path.join(os.path.dirname(cfg.checkpoint), f'gradients_untar_pert_{cfg.epsilon}.pkl')
+        pickle.dump(gradients, open(gradients_path, 'wb'))
         wandb.finish()
 
 

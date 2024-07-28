@@ -1,3 +1,4 @@
+#%%
 import sys
 sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
 sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
@@ -25,7 +26,7 @@ from matplotlib.animation import FuncAnimation
 from diffusion_policy.interpretability.autoencoder import Autoencoder
 from diffusion_policy.interpretability.autoencoder_loss import autoencoder_loss
 
-
+#%%
 def create_keypoint_animation(image_dataset, activations, output_path, object_coordinates = None):
     fig, ax = plt.subplots()
     
@@ -46,12 +47,72 @@ def create_keypoint_animation(image_dataset, activations, output_path, object_co
     anim.save(output_path, writer='imagemagick', fps=1)
     plt.close(fig)
 
+def train_ae(X_train, X_test):
+    autoencoder = Autoencoder(2, 64, torch.nn.Identity())
+    epochs = 1000
+    optimizer = torch.optim.Adam(autoencoder.parameters(), lr=0.0005)
+    for epoch in range(epochs):
+        latents_pre_act, latents, recons = autoencoder(X_train)
+        loss = autoencoder_loss(recons, X_train, latents_pre_act, 0.2)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        # print(f"Epoch {epoch}, loss: {loss.item()}")
+    
+    # calculate the accuracy of the autoencoder
+    X_test_latent, _ = autoencoder.encode(X_test)
+    X_test_recons = autoencoder.decode(X_test_latent)
+    test_loss = torch.nn.functional.mse_loss(X_test_recons, X_test)
+    print(f"Test loss: {test_loss.item()}")
+    return autoencoder
 
+#%%
+def plot_activations(autoencoder, perturbed_activations, no_red_activations, image_activations):
+    # check the reconstruction loss on perturbed images
+    perturbed_activations = torch.tensor(perturbed_activations).float()
+    perturbed_latents, _ = autoencoder.encode(perturbed_activations)
+    perturbed_recons = autoencoder.decode(perturbed_latents)
+    perturbed_loss = torch.nn.functional.mse_loss(perturbed_recons, perturbed_activations)
+    print(f"Perturbed loss: {perturbed_loss.item()}")
+
+    no_red_activations= torch.tensor(no_red_activations).float()
+    no_red_latents, _ = autoencoder.encode(no_red_activations)
+    no_red_recons = autoencoder.decode(no_red_latents)
+    no_red_loss = torch.nn.functional.mse_loss(no_red_recons, no_red_activations)
+    print(f"No red loss: {no_red_loss.item()}")
+
+    # plot the latent space of both the image and perturbed image dataset
+    image_latents, _ = autoencoder.encode(torch.tensor(image_activations).float())
+    image_latents = image_latents.detach().cpu().numpy().reshape(-1, 2)[0:100]
+    perturbed_latents = perturbed_latents.detach().cpu().numpy().reshape(-1, 2)[0:100]
+    no_red_latents = no_red_latents.detach().cpu().numpy().reshape(-1, 2)[0:100]
+    plt.scatter(image_latents[:, 0], image_latents[:, 1], c='r', label='Image dataset')
+    plt.scatter(perturbed_latents[:, 0], perturbed_latents[:, 1], c='b', label='Perturbed image dataset')
+    plt.scatter(no_red_latents[:, 0], no_red_latents[:, 1], c='g', label='No red image dataset')
+    plt.legend()
+    plt.show()
+    # plt.savefig(f'/teamspace/studios/this_studio/bc_attacks/diffusion_policy/diffusion_policy/interpretability/{name}.png')
+
+def get_activations(image_dataset, perturbed_image_dataset, no_red_image_dataset, image_encoder):
+    image_activations = []
+    perturbed_activations = []
+    no_red_activations = []
+    for image in image_dataset:
+        image_activations.append(image_encoder(image).detach().cpu().numpy())
+    for image in perturbed_image_dataset:
+        perturbed_activations.append(image_encoder(image).detach().cpu().numpy())
+    for image in no_red_image_dataset:
+        no_red_activations.append(image_encoder(image).detach().cpu().numpy())
+    return image_activations, perturbed_activations, no_red_activations
+#%%
 torch.backends.cudnn.enabled = False
+config_path = "/teamspace/studios/this_studio/bc_attacks/diffusion_policy/diffusion_policy/interpretability_configs/"
 # @hydra.main(config_path='../interpretability_configs', config_name='bet_image_ph_pick')
-@hydra.main(config_path='../interpretability_configs', config_name='lstm_gmm_image_ph_pick')
 # @hydra.main(config_path='../interpretability_configs', config_name='vanilla_bc_image_ph_pick')
-def main(cfg):
+#%%
+def run(cfg_name, autoencoder=None, plot_name=None):
+    config_file = os.path.join(config_path, f"{cfg_name}.yaml")
+    cfg = OmegaConf.load(config_file)
     checkpoint = cfg.checkpoint
     task = cfg.task
     device = cfg.device
@@ -62,8 +123,8 @@ def main(cfg):
 
     # the output directory should depend on the current directory and the checkpoint path and the attack type and epsilon
     output_dir = os.path.join(os.getcwd(), f"diffusion_policy/data/experiments/image/{task}/{algo}/eval_single")
-    if os.path.exists(output_dir):
-        raise ValueError(f"Output path {output_dir} already exists!")
+    # if os.path.exists(output_dir):
+    #     raise ValueError(f"Output path {output_dir} already exists!")
 
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -116,7 +177,10 @@ def main(cfg):
     if type(patch) == torch.Tensor:
         patch = patch.cpu().numpy()
     if len(patch.shape) == 5:
-        patch = patch[0][1]
+        try:
+            patch = patch[0][1]
+        except IndexError:
+            patch = patch[0][0]
     print(f"Patch shape: {patch.shape}, image shape: {image_dataset[0].shape}")
     print(f"L2 norm of the patch: {np.linalg.norm(patch)}")
     # apply the patch to the image dataset
@@ -137,66 +201,29 @@ def main(cfg):
     no_red_image_dataset = [image[:, :, 4:80, 4:80] for image in no_red_image_dataset]
     print(f"Length of image and perturbed image dataset: {len(image_dataset)}, {image_dataset[0].shape}")
 
-    # get the activations for the image dataset
-    image_activations = []
-    perturbed_activations = []
-    no_red_activations = []
-    for image in image_dataset:
-        image_activations.append(image_encoder(image).detach().cpu().numpy())
-    for image in perturbed_image_dataset:
-        perturbed_activations.append(image_encoder(image).detach().cpu().numpy())
-    for image in no_red_image_dataset:
-        no_red_activations.append(image_encoder(image).detach().cpu().numpy())
- 
-    # train the autoencoder
-    autoencoder = Autoencoder(2, 64, torch.nn.Identity())
-    # convert the image dataset to a tensor with training and testing data
+    image_activations, perturbed_activations, no_red_activations = get_activations(image_dataset, perturbed_image_dataset, no_red_image_dataset, image_encoder)
     image_activations = np.array(image_activations)
     image_activations = image_activations.reshape(image_activations.shape[0], -1)
     X_train, X_test, _, _ = train_test_split(image_activations, image_activations, test_size=0.2)
-    # convert into a tensor
     X_train = torch.tensor(X_train).float()
     X_test = torch.tensor(X_test).float()
-    epochs = 1000
-    optimizer = torch.optim.Adam(autoencoder.parameters(), lr=0.0005)
-    for epoch in range(epochs):
-        latents_pre_act, latents, recons = autoencoder(X_train)
-        loss = autoencoder_loss(recons, X_train, latents_pre_act, 0.2)
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-        # print(f"Epoch {epoch}, loss: {loss.item()}")
-    
-    # calculate the accuracy of the autoencoder
-    X_test_latent, _ = autoencoder.encode(X_test)
-    X_test_recons = autoencoder.decode(X_test_latent)
-    test_loss = torch.nn.functional.mse_loss(X_test_recons, X_test)
-    print(f"Test loss: {test_loss.item()}")
+    # train the autoencoder
+    if autoencoder is None:
+        autoencoder = train_ae(X_train, X_test)
+     # convert the image dataset to a tensor with training and testing data
+    # convert into a tensor
+    plot_activations(autoencoder, perturbed_activations, no_red_activations, image_activations)
 
-    # check the reconstruction loss on perturbed images
-    perturbed_activations = torch.tensor(perturbed_activations).float()
-    perturbed_latents, _ = autoencoder.encode(perturbed_activations)
-    perturbed_recons = autoencoder.decode(perturbed_latents)
-    perturbed_loss = torch.nn.functional.mse_loss(perturbed_recons, perturbed_activations)
-    print(f"Perturbed loss: {perturbed_loss.item()}")
+    return autoencoder
 
-    no_red_activations= torch.tensor(no_red_activations).float()
-    no_red_latents, _ = autoencoder.encode(no_red_activations)
-    no_red_recons = autoencoder.decode(no_red_latents)
-    no_red_loss = torch.nn.functional.mse_loss(no_red_recons, no_red_activations)
-    print(f"No red loss: {no_red_loss.item()}")
-
-    # plot the latent space of both the image and perturbed image dataset
-    image_latents, _ = autoencoder.encode(torch.tensor(image_activations).float())
-    image_latents = image_latents.detach().cpu().numpy().reshape(-1, 2)[0:100]
-    perturbed_latents = perturbed_latents.detach().cpu().numpy().reshape(-1, 2)[0:100]
-    no_red_latents = no_red_latents.detach().cpu().numpy().reshape(-1, 2)[0:100]
-    plt.scatter(image_latents[:, 0], image_latents[:, 1], c='r', label='Image dataset')
-    plt.scatter(perturbed_latents[:, 0], perturbed_latents[:, 1], c='b', label='Perturbed image dataset')
-    plt.scatter(no_red_latents[:, 0], no_red_latents[:, 1], c='g', label='No red image dataset')
-    plt.legend()
-    plt.savefig('/teamspace/studios/this_studio/bc_attacks/diffusion_policy/diffusion_policy/interpretability/latent_space_train0_tar0625_lstm_train1.png')
+#%%
+autoencoder = run("vanilla_bc_image_ph_pick", autoencoder=None)
+# autoencoder = run("bet_image_ph_pick", autoencoder=None)
 
 
-if __name__ == '__main__':
-    main()
+# %%
+autoencoder = run("bet_image_ph_pick", autoencoder=autoencoder)
+# autoencoder = run("vanilla_bc_image_ph_pick", autoencoder=autoencoder)
+# %%
+autoencoder = run("lstm_gmm_image_ph_pick", autoencoder=autoencoder)
+# %%

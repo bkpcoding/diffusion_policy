@@ -369,12 +369,14 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
         samples = action_dist.sample((B, self.model.train_n_neg, Ta)).to(dtype=torch.float32, device=device)
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
+        gradients = {}
         with JsonLogger(log_path) as json_logger:
             for local_epoch_idx in range(cfg.training.num_epochs):
                 step_log = dict()
                 # ========= train for this epoch ==========
                 train_losses = list()
                 loss_per_epoch = 0
+                total_grad = torch.zeros((1, 2, 3, 84, 84), device=device)
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
@@ -402,14 +404,20 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
                             raw_loss, _, _ = self.model.compute_loss_with_grad(obs, batch['action'], action_samples)
                             raw_loss = -raw_loss
                         else:
+                            actions = self.model.predict_action(obs, return_energy=True)
+                            action = actions['action']
+                            energy = actions['energy']
+                            print(energy.shape)
+                            raw_loss = -torch.max(energy, dim=1)[0]
+                            raw_loss = raw_loss.sum()
                             # move to device
-                            batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                            # raw_loss = self.model.compute_loss(batch)
-                            clean_actions = batch['action'][:, To-1:To+Ta-1]
-                            # n_clean_actions = self.model.normalizer['action'].normalize(clean_actions)
-                            n_clean_actions = self.model.normalizer['action'].normalize(predicted_action)
-                            action_samples = torch.cat([n_clean_actions.unsqueeze(1), samples], dim=1) 
-                            raw_loss, _, _ = self.model.compute_loss_with_grad(obs, batch['action'], action_samples)
+                            # batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                            # # raw_loss = self.model.compute_loss(batch)
+                            # clean_actions = batch['action'][:, To-1:To+Ta-1]
+                            # # n_clean_actions = self.model.normalizer['action'].normalize(clean_actions)
+                            # n_clean_actions = self.model.normalizer['action'].normalize(predicted_action)
+                            # action_samples = torch.cat([n_clean_actions.unsqueeze(1), samples], dim=1) 
+                            # raw_loss, _, _ = self.model.compute_loss_with_grad(obs, batch['action'], action_samples)
                         # compute loss
                         loss = raw_loss
                         if self.epoch == 0:
@@ -417,10 +425,7 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
                             continue
                         loss.backward()
                         loss_per_epoch += loss.item()
-                        # update the perturbation
-                        self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sum(obs[view].grad.sign(), dim=0)
-                        # clip the perturbation
-                        self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
+                        total_grad += obs[view].grad.sum(dim=0, keepdim=True)
 
                         # logging
                         raw_loss_cpu = raw_loss.item()
@@ -436,7 +441,9 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
                         if (cfg.training.max_train_steps is not None) \
                             and batch_idx >= (cfg.training.max_train_steps-1):
                             break
-
+                gradients[self.epoch] = total_grad
+                self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sign(total_grad)
+                self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
                 print(f"Loss per epoch: {loss_per_epoch}")
                 if cfg.log:
                     wandb.log({"loss_per_epoch": loss_per_epoch, "epoch": self.epoch})
@@ -470,6 +477,9 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
                 self.epoch += 1
                 json_logger.log(step_log)
                 self.global_step += 1
+        gradients_path = os.path.join(os.path.dirname(cfg.checkpoint), f'gradients_untar_pert_{cfg.epsilon}.pkl')
+        pickle.dump(gradients, open(gradients_path, 'wb'))
+
 
 
 @hydra.main(

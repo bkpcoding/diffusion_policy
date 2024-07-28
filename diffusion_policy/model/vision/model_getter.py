@@ -6,6 +6,7 @@ def get_resnet(name, weights=None, **kwargs):
     name: resnet18, resnet34, resnet50
     weights: "IMAGENET1K_V1", "r3m"
     """
+    print(f"********** Getting resnet model: {name} **********")
     # load r3m weights
     if (weights == "r3m") or (weights == "R3M"):
         return get_r3m(name=name, **kwargs)

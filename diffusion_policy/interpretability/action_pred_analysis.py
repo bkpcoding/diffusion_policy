@@ -18,7 +18,7 @@ def visualize_feature_maps(feature_maps, num_maps=6):
     fig, axes = plt.subplots(1, num_maps, figsize=(20, 5))
     for i, ax in enumerate(axes):
         if i < feature_maps.shape[1]:
-            im = ax.imshow(feature_maps[0, i], cmap='viridis', aspect='auto', vmin=-0.5, vmax=0.5)
+            im = ax.imshow(feature_maps[0, i], cmap='viridis', aspect='auto', vmin=-5, vmax=5)
             ax.axis('off')
         else:
             ax.remove()
@@ -68,7 +68,37 @@ except:
 device = torch.device(device)
 policy.to(device)
 policy.eval()
+#%%
+# load the patch
+try:
+    patch = np.load(cfg.patch_path, allow_pickle=True)
+except:
+    patch = torch.load(cfg.patch_path)
+patch = patch.squeeze(0)
+patch = torch.zeros_like(patch)
 
+#%%
+# load the observation dicts from the pickle file
+clean_obs = '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/pkl_files/clean_obs_dicts_0.0625.pkl'
+obs_dicts = pickle.load(open(clean_obs, 'rb'))
+print(obs_dicts[0]['robot0_eye_in_hand_image'].shape)
+
+#%%
+# clean action prediction
+clean_action_pred = policy.predict_action(obs_dicts[5], return_latent=True)['latent']
+print(clean_action_pred[0][0, 0], clean_action_pred[1][0, 0])
+clean_action = policy.predict_action(obs_dicts[5])['action']
+print(clean_action[0][0])
+
+#%%
+perturbed_obs = obs_dicts[5].copy()
+perturbed_obs['robot0_eye_in_hand_image'] = perturbed_obs['robot0_eye_in_hand_image'] + patch
+perturbed_action_pred = policy.predict_action(perturbed_obs, return_latent=True)['latent']
+print(perturbed_action_pred[0][0, 0], perturbed_action_pred[1][0, 0])
+perturbed_action = policy.predict_action(perturbed_obs)['action']
+print(perturbed_action[0][0])
+
+#%%
 # load the dataset from config.image_dataset
 image_dataset = pickle.load(open(cfg.image_dataset, 'rb'))
 object_dataset = pickle.load(open(cfg.object_dataset, 'rb'))
@@ -99,58 +129,3 @@ if len(patch.shape) == 5:
     patch = patch[0][1]
 print(f"Patch shape: {patch.shape}, image shape: {image_dataset[0].shape}")
 print(f"L2 norm of the patch: {np.linalg.norm(patch)}")
-# apply the patch to the image dataset
-perturbed_image_dataset = []
-for image in image_dataset:
-    try:
-        perturbed_image_dataset.append(image + patch)
-    except ValueError:
-        patch = np.expand_dims(patch, axis=0)
-        perturbed_image_dataset.append(image + patch)
-        print(np.concatenate([image, patch], axis=0).shape)
-# convert the images to tensor
-image_dataset = [torch.tensor(image)[0].to(device).unsqueeze(0) for image in image_dataset]
-image_dataset = [image[:, :, 4:80, 4:80] for image in image_dataset]
-perturbed_image_dataset = [torch.tensor(image)[0].to(device).unsqueeze(0) for image in perturbed_image_dataset]
-perturbed_image_dataset = [image[:, :, 4:80, 4:80] for image in perturbed_image_dataset]
-no_red_image_dataset = [torch.tensor(image).to(device).unsqueeze(0) for image in no_red_image_dataset]
-no_red_image_dataset = [image[:, :, 4:80, 4:80] for image in no_red_image_dataset]
-print(f"Length of image and perturbed image dataset: {len(image_dataset)}, {image_dataset[0].shape}")
-net = image_encoder.backbone.nets
-
-
-#%%
-with Trace(net, '6.1.relu') as ret:
-    _ = net(image_dataset[0])
-    representation = ret.output
-representation_clean = representation.detach().cpu().numpy()
-print(f"Representation shape: {representation_clean.shape}")
-visualize_feature_maps(representation_clean, num_maps=6)
-
-# get the activations for the image dataset
-# image_activations = []
-# perturbed_activations = []
-# no_red_activations = []
-# for image in image_dataset:
-#     image_activations.append(image_encoder(image).detach().cpu().numpy())
-# for image in perturbed_image_dataset:
-#     perturbed_activations.append(image_encoder(image).detach().cpu().numpy())
-# for image in no_red_image_dataset:
-#     no_red_activations.append(image_encoder(image).detach().cpu().numpy())
-
-
-
-# %%
-with Trace(net, '6.1.relu') as ret:
-    _ = net(perturbed_image_dataset[0])
-    representation = ret.output
-representation_perturbed = representation.detach().cpu().numpy()
-print(f"Representation shape: {representation_perturbed.shape}")
-visualize_feature_maps(representation_perturbed, num_maps=6)
-
-# %%
-# plot the difference between the clean and perturbed representations
-diff = representation_clean - representation_perturbed
-visualize_feature_maps(diff, num_maps=6)
-# %%
-# get the activations of some layers before

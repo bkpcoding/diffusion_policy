@@ -19,7 +19,9 @@ obs_as_local_cond: False
 obs_as_global_cond: False
 pred_action_steps_only: False
 dataset_obs_steps: ${n_obs_steps}
-
+save_video: False
+n_vis: 3
+log: False
 
 policy:
   _target_: diffusion_policy.policy.bet_image_policy.BETImagePolicy
@@ -35,18 +37,19 @@ policy:
     action_dim: ${task.shape_meta.action.shape[0]}
     predict_offsets: True
   
-  # obs_encoder:
-  #   _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
-  #   shape_meta: ${shape_meta}
-  #   rgb_model:
-  #     _target_: diffusion_policy.model.vision.model_getter.get_resnet
-  #     name: resnet18
-  #     weights: IMAGENET1K_V1 # or r3m
-  #   resize_shape: null
-  #   random_crop: False
-  #   use_group_norm: False
-  #   share_rgb_model: True
-  #   imagenet_norm: True
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+    shape_meta: ${shape_meta}
+    rgb_model:
+      _target_: diffusion_policy.model.vision.model_getter.get_resnet
+      # name: resnet18
+      name: resnet50
+      weights: IMAGENET1K_V1 # or r3m
+    resize_shape: null
+    random_crop: False
+    use_group_norm: False
+    share_rgb_model: True
+    imagenet_norm: True
 
   state_prior:
     _target_: diffusion_policy.model.bet.latent_generators.mingpt.MinGPT
@@ -91,7 +94,7 @@ optimizer:
 
 training:
   device: "cuda:0"
-  seed: 42
+  seed: 999
   debug: False
   resume: True
   # optimization
@@ -113,6 +116,7 @@ training:
   # misc
   tqdm_interval_sec: 1.0
   sample_max_batch: 32
+  freeze_encoder: True
 
 logging:
   project: bet_image_policy

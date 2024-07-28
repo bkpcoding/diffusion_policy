@@ -11,7 +11,7 @@ checkpoints:
 
 checkpoint: ${checkpoints.train0}
 
-epsilon: 0.125
+epsilon: 0.0625
 epsilon_step: 0.001
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -22,7 +22,9 @@ clip_max: 1
 targeted: False
 perturbations: [0.15, 0.15, 0, 0, 0, 0, 0]
 log: False
-device: "cuda:0"
+device: "cuda:3"
+save_video: False
+n_vis: 3
 
 retrain: False
 # patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train0/checkpoints/untar_pert_0.0625_epoch_10_mean_score_0.04_robot0_eye_in_hand_image.pkl'
@@ -54,7 +56,7 @@ policy:
   crop_shape: [84, 84]
 
 dataloader:
-  batch_size: 128
+  batch_size: 256
   num_workers: 8
   shuffle: True
   pin_memory: True
@@ -82,11 +84,11 @@ training:
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 50
+  num_epochs: 52
   gradient_accumulate_every: 1
   # training loop control
   # in epochs
-  rollout_every: 5
+  rollout_every: 10
   checkpoint_every: 50
   val_every: 1
   sample_every: 5

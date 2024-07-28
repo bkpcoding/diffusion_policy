@@ -15,10 +15,14 @@ n_test: 50
 n_train: 2
 log: False
 max_steps: 400
-device: 'cuda:0'
+device: 'cuda:1'
 attack: True
 attack_type: 'patch'
-patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_0/checkpoints/untar_pert_0.0625_epoch_5_mean_score_0.82_robot0_eye_in_hand_image.pkl'
+# patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_0/checkpoints/untar_pert_0.0625_epoch_5_mean_score_0.82_robot0_eye_in_hand_image.pkl'
+# patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vanilla_bc/train_0/checkpoints/untar_pert_0.0625_epoch_15_mean_score_0.62_robot0_eye_in_hand_image.pkl'
+# patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_0/checkpoints/untar_pert_0.0625_epoch_5_mean_score_0.0_robot0_eye_in_hand_image.pkl'
+# patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train6/checkpoints/untar_pert_0.0625_epoch_25_mean_score_0.0_robot0_eye_in_hand_image_just_nobs_reg.pkl'
+patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/random_patch.pkl'
 # epsilons: [0.01, 0.03, 0.1, 0.3, 0.5]
 # epsilons: [0.0078125, 0.01953125, 0.03125, 0.0625, 0.125]
 # epsilons: [0.125, 0.2, 0.3]
@@ -29,6 +33,8 @@ view: 'robot0_eye_in_hand_image'
 rand_target: False
 action_space: None
 targeted: False
+save_video: False
+n_vis: 3
 
 # pgd:
 #  eta_bound:

@@ -15,4 +15,5 @@ object_dataset: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots
 no_red_image_dataset: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/pkl_files/ibc_no_red_eye_in_hand_images.pkl
 plot_path: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/interpretability/
 # patch_path: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_0/checkpoints/tar_pert_0.125_epoch_5_mean_score_0.0_robot0_eye_in_hand_image.pkl
-patch_path: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vanilla_bc/train_0/checkpoints/untar_pert_0.0625_epoch_5_mean_score_0.64_robot0_eye_in_hand_image.pkl
+# patch_path: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vanilla_bc/train_0/checkpoints/untar_pert_0.0625_epoch_5_mean_score_0.64_robot0_eye_in_hand_image.pkl
+patch_path: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vanilla_bc/train_0/checkpoints/untar_pert_0.0625_epoch_20_mean_score_0.35714285714285715_robot0_eye_in_hand_image_feature_dist.pkl

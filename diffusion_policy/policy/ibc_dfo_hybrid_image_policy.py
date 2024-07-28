@@ -377,6 +377,7 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         samples = action_dist.sample((B, self.train_n_neg, Ta)).to(
             dtype=this_action.dtype)
         if action_samples is None:
+            print(this_action.shape, samples.shape)
             action_samples = torch.cat([
                 this_action.unsqueeze(1), samples], dim=1)
         # print("Action samples in compute_loss: ", action_samples[0, 10, :])
@@ -403,6 +404,7 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
         # print("Most probable action: ", most_probable_action)
         # print('Energy of the first action: ', logits[0, 0])
         # print('Energy of the second action: ', logits[0, 1])
+        # print('Energy of the third action: ', logits[0, 2])
         # print('Energy of the most probable action: ', torch.max(logits[0, 1:]))
         if return_energy:
             return loss, obs_dict_copy, nobs_features, (logits[0, 0], logits[0, 1])

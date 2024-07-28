@@ -3,8 +3,11 @@ checkpoints:
     train1: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train1/checkpoints/epoch=0050-test_mean_score=0.860.ckpt'
     train2: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train2/checkpoints/epoch=0200-test_mean_score=0.833.ckpt'
     train3: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train3/checkpoints/epoch=0350-test_mean_score=0.929.ckpt'
-
-checkpoint: ${checkpoints.train0}
+    train5: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train5/checkpoints/epoch=0150-test_mean_score=1.000.ckpt'
+    train6: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train6/checkpoints/epoch=0450-test_mean_score=1.000.ckpt'
+    train7: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train7/checkpoints/epoch=0250-test_mean_score=1.000.ckpt'
+    train8: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train8/checkpoints/epoch=0350-test_mean_score=0.929.ckpt'
+checkpoint: ${checkpoints.train8}
 
 task: 'lift_ph'
 dataset_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/robomimic/datasets/lift/ph/image.hdf5'
@@ -15,10 +18,13 @@ image_dataset: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/
 object_dataset: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/pkl_files/ibc_objects.pkl
 no_red_image_dataset: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/pkl_files/ibc_no_red_eye_in_hand_images.pkl
 plot_path: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/interpretability/
+patch_path: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vanilla_bc/train_0/checkpoints/untar_pert_0.0625_epoch_20_mean_score_0.35714285714285715_robot0_eye_in_hand_image_feature_dist.pkl
 # patch_path: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train0/checkpoints/tar_pert_0.125_epoch_5_mean_score_0.06_robot0_eye_in_hand_image.pkl
 # patch_path: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train0/checkpoints/untar_pert_0.0625_epoch_10_mean_score_0.04_robot0_eye_in_hand_image_retrain.pkl
 # patch_path: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train0/checkpoints/untar_pert_0.0625_epoch_5_mean_score_0.14285714285714285_robot0_eye_in_hand_image_ker_3_with_reg0.1_with_dist_61relu.pkl
-patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train3/checkpoints/untar_pert_0.0625_epoch_5_mean_score_0.07142857142857142_robot0_eye_in_hand_image_ker_3_with_reg1000_with_dist_61relu.pkl'
+# patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train5/checkpoints/untar_pert_0.0625_epoch_15_mean_score_0.0_robot0_eye_in_hand_image_just_nobs_reg.pkl'
+# patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train6/checkpoints/untar_pert_0.0625_epoch_25_mean_score_0.0_robot0_eye_in_hand_image_just_nobs_reg.pkl'
+# patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train6/checkpoints/tar_pert_0.0625_epoch_25_mean_score_0.0_robot0_eye_in_hand_image_step_loss.pkl'
 # patch_path: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_0/checkpoints/untar_pert_0.0625_epoch_5_mean_score_0.0_robot0_eye_in_hand_image.pkl
 # patch_path: /teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/images/patch_conv.pkl
 
