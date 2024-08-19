@@ -35,7 +35,6 @@ from diffusers.training_utils import EMAModel
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
-# %%
 class TrainBETLowdimWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
 
@@ -104,16 +103,16 @@ class TrainBETLowdimWorkspace(BaseWorkspace):
         assert isinstance(env_runner, BaseLowdimRunner)
 
         # configure logging
-        wandb_run = wandb.init(
-            dir=str(self.output_dir),
-            config=OmegaConf.to_container(cfg, resolve=True),
-            **cfg.logging
-        )
-        wandb.config.update(
-            {
-                "output_dir": self.output_dir,
-            }
-        )
+        # wandb_run = wandb.init(
+        #     dir=str(self.output_dir),
+        #     config=OmegaConf.to_container(cfg, resolve=True),
+        #     **cfg.logging
+        # )
+        # wandb.config.update(
+        #     {
+        #         "output_dir": self.output_dir,
+        #     }
+        # )
 
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
@@ -183,7 +182,7 @@ class TrainBETLowdimWorkspace(BaseWorkspace):
                         is_last_batch = (batch_idx == (len(train_dataloader)-1))
                         if not is_last_batch:
                             # log of last step is combined with validation and rollout
-                            wandb_run.log(step_log, step=self.global_step)
+                            # wandb_run.log(step_log, step=self.global_step)
                             json_logger.log(step_log)
                             self.global_step += 1
 
@@ -240,6 +239,7 @@ class TrainBETLowdimWorkspace(BaseWorkspace):
                         else:
                             pred_action = result['action_pred']
                         mse = torch.nn.functional.mse_loss(pred_action, gt_action)
+                        print("MSE: ", mse)
                         # log
                         step_log['train_action_mse_error'] = mse.item()
                         # release RAM
@@ -276,7 +276,7 @@ class TrainBETLowdimWorkspace(BaseWorkspace):
 
                 # end of epoch
                 # log of last step is combined with validation and rollout
-                wandb_run.log(step_log, step=self.global_step)
+                # wandb_run.log(step_log, step=self.global_step)
                 json_logger.log(step_log)
                 self.global_step += 1
                 self.epoch += 1

@@ -64,6 +64,9 @@ class MinGPT(latent_generator.AbstractLatentGenerator):
         )
 
         self.model = mingpt_model.GPT(gpt_config)
+        seed = 42
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
 
     def get_latent_and_loss(
         self,
@@ -147,7 +150,8 @@ class MinGPT(latent_generator.AbstractLatentGenerator):
                 return logits, loss
 
     def generate_latents(
-        self, obs_rep: torch.Tensor
+        self, obs_rep: torch.Tensor,
+        return_output: bool = False,
     ) -> torch.Tensor:
         batch, seq, embed = obs_rep.shape
 
@@ -166,10 +170,14 @@ class MinGPT(latent_generator.AbstractLatentGenerator):
         probs = F.softmax(logits, dim=-1)
         batch, seq, choices = probs.shape
         # Sample from the multinomial distribution, one per row.
-        sampled_data = torch.multinomial(probs.view(-1, choices), num_samples=1)
+        gen = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu")
+        gen.manual_seed(42)
+        sampled_data = torch.multinomial(probs.view(-1, choices), num_samples=1, generator=gen)
         sampled_data = einops.rearrange(
             sampled_data, "(batch seq) 1 -> batch seq 1", batch=batch, seq=seq
         )
+        if return_output:
+            return output
         if self.predict_offsets:
             sampled_offsets = offsets[
                 torch.arange(offsets.shape[0]), sampled_data.flatten()

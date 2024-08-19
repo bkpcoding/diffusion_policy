@@ -104,6 +104,8 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                 model=self.ema_model)
 
         # configure env
+        cfg.task.env_runner['n_test'] = 16
+        cfg.task.env_runner['n_train'] = 2
         env_runner: BaseImageRunner
         env_runner = hydra.utils.instantiate(
             cfg.task.env_runner,
@@ -161,6 +163,7 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         if train_sampling_batch is None:
                             train_sampling_batch = batch
+                        print(batch['obs']['image'].shape)
 
                         # compute loss
                         raw_loss = self.model.compute_loss(batch)
@@ -212,7 +215,7 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
 
                 # run rollout
                 if (self.epoch % cfg.training.rollout_every) == 0:
-                    runner_log = env_runner.run(policy)
+                    runner_log = env_runner.run(policy, cfg=cfg)
                     # log all
                     step_log.update(runner_log)
 
@@ -335,14 +338,6 @@ class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
 
         self.model.set_normalizer(normalizer)
 
-        # configure env
-        env_runner: BaseImageRunner
-        env_runner = hydra.utils.instantiate(
-            cfg.task.env_runner,
-            output_dir=self.output_dir)
-        assert isinstance(env_runner, BaseImageRunner)
-
-
         if cfg.training.debug:
             cfg.training.num_epochs = 2
             cfg.training.max_train_steps = 3
@@ -351,6 +346,18 @@ class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
             cfg.training.checkpoint_every = 1
             cfg.training.val_every = 1
             cfg.training.sample_every = 1
+            # cfg.log = False
+            cfg.task.env_runner['n_test'] = 1
+            cfg.task.env_runner['n_train'] = 2
+            cfg.task.env_runner['max_steps'] = 24
+            cfg.policy.noise_scheduler.num_train_timesteps = 10
+
+        # configure env
+        env_runner: BaseImageRunner
+        env_runner = hydra.utils.instantiate(
+            cfg.task.env_runner,
+            output_dir=self.output_dir)
+        assert isinstance(env_runner, BaseImageRunner)
 
         if cfg.log:
             wandb.init(
@@ -361,7 +368,15 @@ class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
         # set the model in eval mode
         self.model.eval()
         # training loop for the universal perturbation
-        self.univ_pert = torch.zeros((3, 84, 84)).to(device)
+        self.univ_pert = {}
+        image_shape = cfg.task['image_shape']
+        if cfg.view == 'both':
+            views = ['agentview_image', 'robot0_eye_in_hand_image']
+        else:
+            views = [view]
+        for view in views:
+            # self.univ_pert[view] = torch.zeros((3, 84, 84)).to(device)
+            self.univ_pert[view] = torch.zeros((image_shape[0], image_shape[1], image_shape[2])).to(device)
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with JsonLogger(log_path) as json_logger:
             for local_epoch_idx in range(cfg.training.num_epochs):
@@ -369,6 +384,9 @@ class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
                 # ========= train for this epoch ==========
                 train_losses = list()
                 loss_per_epoch = 0
+                total_grad = {}
+                for view in views:
+                    total_grad[view] = torch.zeros((1, cfg.n_obs_steps, image_shape[0], image_shape[1], image_shape[2])).to(device)
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
@@ -376,16 +394,18 @@ class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         obs = batch['obs']
-                        if batch['obs']['agentview_image'].shape[0] != cfg.dataloader.batch_size:
-                            continue
                         obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
                         # apply the patch the view
-                        obs[view] = obs[view] + self.univ_pert
-                        # clamp the observation to be between 0 and 1
-                        obs[view] = torch.clamp(obs[view], 0, 1)
+                        for view in views:
+                            # print(f"obs shape: {obs[view].shape}, pert shape: {self.univ_pert[view].shape}")
+                            # print(f"obs shape: {obs[view].shape}, pert shape: {self.univ_pert[view].shape}")
+                            # obs[view] = obs[view] + self.univ_pert[view]
+                            obs[view][:, :cfg.n_obs_steps, ...] = obs[view][:, :cfg.n_obs_steps, ...] + self.univ_pert[view]
+                            # clamp the observation to be between 0 and 1
+                            obs[view] = torch.clamp(obs[view], 0, 1)
+                            obs[view].requires_grad = True
                         obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
                         # set the requires_grad to true
-                        obs[view].requires_grad = True
                         if cfg.targeted:
                             batch['obs'] = obs
                             loss = -self.model.compute_loss(batch)
@@ -394,22 +414,30 @@ class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
                             loss = self.model.compute_loss(batch)
                         # loss = torch.nn.functional.mse_loss(predicted_action, predicted_action2)
                         # take the gradient of the loss with respect to the perturbation
-                        if self.epoch == 0:
-                            loss_per_epoch += loss.item()
-                            continue
+                        # if self.epoch == 0:
+                        #     loss_per_epoch += loss.item()
+                        #     continue
                         loss.backward()
                         loss_per_epoch += loss.item()
-                        # update the perturbation
-                        self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sum(obs[view].grad.sign(), dim=0)
-                        # clip the perturbation
-                        self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
+                        for view in views:
+                            total_grad[view] += obs[view].grad.sum(dim=0, keepdim=True)[:, :cfg.n_obs_steps, ...]
+                            # grad = obs[view].grad.sum(dim=0, keepdim=True)
+                            # check if any element of the gradient is non-zero
+                            # for i in range(grad.shape[1]):
+                            #     if torch.any(grad[0, i, ...] != 0):
+                            #         print(f"Non-zero gradient for {view} at index {i}")
+                for view in views:
+                    # print(f"Total grad shape: {total_grad[view].shape}")
+                    self.univ_pert[view] = self.univ_pert[view] + cfg.epsilon_step * torch.sign(total_grad[view])
+                    self.univ_pert[view] = torch.clamp(self.univ_pert[view], -cfg.epsilon, cfg.epsilon)
                 print(f"Loss for {self.epoch}: {loss_per_epoch}")
                 if cfg.log:
                     wandb.log({"loss": loss_per_epoch, "epoch": self.epoch})
                 # print(f"Linf norm of the perturbation: {torch.norm(self.univ_pert, p=float('inf'))}")
-                print(f"L2 norm of the perturbation: {torch.norm(self.univ_pert, p=2)}")
+                for view in views:
+                    print(f"L2 norm of the {view} perturbation: {torch.norm(self.univ_pert[view], p=2)}")
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch > 0:
+                if (self.epoch % cfg.training.rollout_every) == 0:
                     runner_log = env_runner.run(self.model, self.univ_pert, cfg)
                     # log all
                     step_log.update(runner_log)

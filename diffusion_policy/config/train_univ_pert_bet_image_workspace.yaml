@@ -19,7 +19,8 @@ epsilon_step: 0.01
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
-view: "robot0_eye_in_hand_image"
+# view: "robot0_eye_in_hand_image"
+view: "both"
 clip_min: 0
 clip_max: 1
 targeted: False
@@ -31,8 +32,8 @@ lambda_feat: 100
 alpha: 0.5
 retrain: False
 patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train0/checkpoints/untar_pert_0.0625_epoch_10_mean_score_0.04_robot0_eye_in_hand_image.pkl'
-save_video: False
-n_vis: 0
+save_video: True
+n_vis: 3
 switch: 15 # after how many epoch to switch from classification loss to mse loss
 
 horizon: 2
@@ -129,7 +130,7 @@ training:
   enable_normalizer: True
   # training loop control
   # in epochs
-  rollout_every: 50
+  rollout_every: 25
   checkpoint_every: 25
   val_every: 5
   sample_every: 10

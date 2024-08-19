@@ -37,24 +37,28 @@ class BETLowdimPolicy(BaseLowdimPolicy):
         assert 'obs' in obs_dict
         assert 'past_action' not in obs_dict # not implemented yet
         nobs = self.normalizer['obs'].normalize(obs_dict['obs'])
+        print(f"nobs shape: {nobs.shape}")
         B, _, Do = nobs.shape
         To = self.n_obs_steps
         T = self.horizon
-
+        print(f"nobs shape: {nobs.shape}")
         # pad To to T
         obs = torch.full((B,T,Do), -2, dtype=nobs.dtype, device=nobs.device)
         obs[:,:To,:] = nobs[:,:To,:]
 
         # (B,T,Do)
         enc_obs = self.obs_encoding_net(obs)
+        print("enc_obs shape: ", enc_obs.shape)
 
         # Sample latents from the prior
         latents, offsets = self.state_prior.generate_latents(enc_obs)
+        print(f"Latents shape: {latents[0].shape}")
 
         # un-descritize
         naction_pred = self.action_ae.decode_actions(
             latent_action_batch=(latents, offsets)
         )
+        print(f"naction_pred shape: {naction_pred.shape}")
         # (B,T,Da)
 
         # un-normalize

@@ -1,6 +1,7 @@
 defaults:
   - _self_
-  - task: blockpush_lowdim_seed
+  # - task: blockpush_lowdim_seed
+  - task: pusht_lowdim
 
 name: train_bet_lowdim
 _target_: diffusion_policy.workspace.train_bet_lowdim_workspace.TrainBETLowdimWorkspace
@@ -11,9 +12,9 @@ keypoint_dim: ${task.keypoint_dim}
 task_name: ${task.name}
 exp_name: "default"
 
-horizon: 3
-n_obs_steps: 3
-n_action_steps: 1
+horizon: 10
+n_obs_steps: 2
+n_action_steps: 8
 n_latency_steps: 0
 past_action_visible: False
 keypoint_visible_rate: 1.0

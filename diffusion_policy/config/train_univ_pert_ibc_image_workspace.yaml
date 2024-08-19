@@ -1,33 +1,39 @@
 defaults:
   - _self_
-  - task: lift_image
+  # - task: lift_image
+  - task: pusht_image
 
 name: train_ibc_dfo_hybrid
 _target_: diffusion_policy.workspace.train_ibc_dfo_hybrid_workspace.TrainUnivPertIbcDfoHybridWorkspace
 checkpoints: 
-    train0: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_0/checkpoints/epoch=1900-test_mean_score=0.955.ckpt'
-    train1: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_1/checkpoints/epoch=3050-test_mean_score=0.773.ckpt'
-    train2: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_2/checkpoints/epoch=2100-test_mean_score=1.000.ckpt'
+    # train0: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_0/checkpoints/epoch=1900-test_mean_score=0.955.ckpt'
+    # train1: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_1/checkpoints/epoch=3050-test_mean_score=0.773.ckpt'
+    # train2: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/ibc_dfo/train_2/checkpoints/epoch=2100-test_mean_score=1.000.ckpt'
+    train0: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/pusht/ibc_dfo/train_0/checkpoints/epoch=1400-test_mean_score=0.742.ckpt'
+    train1: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/pusht/ibc_dfo/train_1/checkpoints/epoch=2800-test_mean_score=0.723.ckpt'
+    train2: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/pusht/ibc_dfo/train_2/checkpoints/epoch=2500-test_mean_score=0.709.ckpt'
 
 checkpoint: ${checkpoints.train0}
 
 epsilon: 0.0625
-epsilon_step: 0.001
+epsilon_step: 0.01
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
-view: "robot0_eye_in_hand_image"
+# view: "robot0_eye_in_hand_image"
+# view: "both"
+view: 'image'
 clip_min: 0
 clip_max: 1
 targeted: False
 perturbations: [0.15, 0.15, 0, 0, 0, 0, 0]
 log: False
-device: "cuda:3"
-save_video: False
+device: "cuda:0"
+save_video: True
 n_vis: 3
 
 retrain: False
-# patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train0/checkpoints/untar_pert_0.0625_epoch_10_mean_score_0.04_robot0_eye_in_hand_image.pkl'
+patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/bet/train0/checkpoints/untar_pert_0.0625_epoch_10_mean_score_0.04_robot0_eye_in_hand_image.pkl'
 
 horizon: 2
 n_obs_steps: 2

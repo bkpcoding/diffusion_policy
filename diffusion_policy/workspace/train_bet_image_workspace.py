@@ -28,7 +28,10 @@ from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
-
+from diffusion_policy.model.common.normalizer import (
+    LinearNormalizer, 
+    SingleFieldLinearNormalizer
+)
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 class TrainBETImageWorkspace(BaseWorkspace):
@@ -69,7 +72,6 @@ class TrainBETImageWorkspace(BaseWorkspace):
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
-        normalizer = dataset.get_normalizer()
 
         # configure validation dataset
         val_dataset = dataset.get_validation_dataset()
@@ -166,7 +168,6 @@ class TrainBETImageWorkspace(BaseWorkspace):
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         if train_sampling_batch is None:
                             train_sampling_batch = batch
-
                         # compute loss
                         raw_loss, loss_components = self.policy.compute_loss(batch)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
@@ -210,13 +211,13 @@ class TrainBETImageWorkspace(BaseWorkspace):
                 policy.eval()
 
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch > 0:
+                if (self.epoch % cfg.training.rollout_every) == 0:
                     runner_log = env_runner.run(policy, cfg=cfg)
                     # log all
                     step_log.update(runner_log)
 
                 # run validation
-                if (self.epoch % cfg.training.val_every) == 0 and self.epoch > 0:
+                if (self.epoch % cfg.training.val_every) == 0:
                     with torch.no_grad():
                         val_losses = list()
                         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
@@ -234,7 +235,7 @@ class TrainBETImageWorkspace(BaseWorkspace):
                             step_log['val_loss'] = val_loss
 
                 # run diffusion sampling on a training batch
-                if (self.epoch % cfg.training.sample_every) == 0 and self.epoch > 0:
+                if (self.epoch % cfg.training.sample_every) == 0:
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
                         batch = train_sampling_batch
@@ -244,12 +245,14 @@ class TrainBETImageWorkspace(BaseWorkspace):
                         obs_dict = dict_apply(batch['obs'], lambda x: x[:n_samples])
                         gt_action = batch['action']
                         
-                        result = policy.predict_action(obs_dict)
+                        result = self.policy.predict_action(obs_dict)
                         pred_action = result['action']
                         start = cfg.n_obs_steps - 1
                         end = start + cfg.n_action_steps
                         gt_action = gt_action[:,start:end]
                         mse = torch.nn.functional.mse_loss(pred_action, gt_action)
+                        print(pred_action.shape, gt_action.shape)
+                        print("MSE: ", mse)
                         # log
                         step_log['train_action_mse_error'] = mse.item()
                         # release RAM
@@ -261,7 +264,7 @@ class TrainBETImageWorkspace(BaseWorkspace):
                         del mse
                 
                 # checkpoint
-                if (self.epoch % cfg.training.checkpoint_every) == 0 and self.epoch > 0:
+                if (self.epoch % cfg.training.checkpoint_every) == 0:
                     # checkpointing
                     if cfg.checkpoint.save_last_ckpt:
                         self.save_checkpoint()
@@ -383,20 +386,29 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
 
         # device transfer
         self.model.to(device)
-        obs_encoder = self.model.obs_encoder
+        # obs_encoder = self.model.obs_encoder
         # print the class of observation encoder
-        image_encoder = self.model.obs_encoder.obs_nets[cfg.view]
-        net = image_encoder.backbone.nets
-        print(f'Net is {net}')
+        # image_encoder = self.model.obs_encoder.obs_nets[cfg.view]
+        # net = image_encoder.backbone.nets
+        # print(f'Net is {net}')
 
         if cfg.log:
             wandb.log({'eta': cfg.eta, 'lambda_feat': cfg.lambda_feat, 'kernel_size': cfg.kernel_size})
+        # training loop for the universal perturbation
+        self.univ_pert = {}
+        if cfg.targeted:
+            self.univ_pert['perturbations'] = torch.tensor(cfg.perturbations, device='cpu')
+        if cfg.view == 'both':
+            views = ['agentview_image', 'robot0_eye_in_hand_image']
+        else:
+            views = [view]
+        for view in views:
+            self.univ_pert[view] = torch.zeros((3, 84, 84)).to(device)
 
-        # define the perturbation
-        self.univ_pert = torch.zeros((1, 2, 3, 84, 84)).to(device)
         # add some initial noise to the self.univ_pert for untargeted attacks
         if cfg.targeted == False:
-            self.univ_pert += torch.rand((1, 2, 3, 84, 84)).to(device) * 2 * cfg.epsilon_step - cfg.epsilon_step
+            for view in views:
+                self.univ_pert[view] = torch.rand((3, 84, 84)).to(device) * 2 * cfg.epsilon - cfg.epsilon
         # define the perturbation to be random noise within epsilon
         # self.univ_pert = torch.rand((1, 3, 84, 84)).to(device) * 2 * cfg.epsilon - cfg.epsilon
         if cfg.retrain:
@@ -437,7 +449,12 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                 # ========= train for this epoch ==========
                 train_losses = list()
                 loss_per_epoch = 0
-                total_grad = torch.zeros_like(self.univ_pert).to(device)
+                if cfg.view == 'both':
+                    total_grad = {}
+                    for view in views:
+                        total_grad[view] = torch.zeros((1, 2, 3, 84, 84)).to(device)
+                else:
+                    total_grad = torch.zeros((1, 2, 3, 84, 84)).to(device)
                 raw_loss = 0
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
@@ -458,11 +475,13 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                         obs = batch['obs'].copy()
                         # if batch['obs']['agentview_image'].shape[0] != cfg.dataloader.batch_size:
                         #     continue
-                        obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
-                        obs[view] = obs[view] + self.univ_pert
                         # clamp the observation to be between clip_min and clip_max
-                        obs[view] = torch.clamp(obs[view], cfg.clip_min, cfg.clip_max)
-                        obs[view].requires_grad = True
+                        for view in views:
+                            obs[view] = obs[view] + self.univ_pert[view]
+                            # clamp the observation to be between 0 and 1
+                            obs[view] = torch.clamp(obs[view], 0, 1)
+                            obs[view].requires_grad = True
+                        obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
                         batch_cp = batch.copy()
                         if cfg.targeted:
                             with torch.no_grad():
@@ -522,7 +541,7 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                             # raw_loss += cfg.lambda_feat * distance
                             # raw_loss += eta * reg_term
                             # print(f"Loss after regularization: {raw_loss}")
-                            print(f"Mean and std of univ perturbation: {torch.mean(self.univ_pert)}, {torch.std(self.univ_pert)}")
+                            # print(f"Mean and std of univ perturbation: {torch.mean(self.univ_pert)}, {torch.std(self.univ_pert)}")
                         # compute loss
                         # loss = distance
                         loss = raw_loss
@@ -532,25 +551,27 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                         loss.backward()
                         loss_per_epoch += loss.item()
                         # update the perturbation
-                        total_grad += obs[view].grad.sum(dim=0, keepdim=True)
+                        if cfg.view == 'both':
+                            for view in views:
+                                total_grad[view] += obs[view].grad.sum(dim=0, keepdim=True)
+                        else:
+                            total_grad += obs[view].grad.sum(dim=0, keepdim=True)
                         # log the magnitude of the gradient
                         if cfg.log:
                             wandb.log({"gradient_magnitude": torch.norm(obs[view].grad).item()})
                             # log the loss components
                             for key, value in loss_components.items():
                                 wandb.log({key: value.item()})
-                print(total_grad.shape, total_grad)
-                gradients[self.epoch] = total_grad
+                # gradients[self.epoch] = total_grad
+                for view in views:
+                    self.univ_pert[view] = self.univ_pert[view] + cfg.epsilon_step * torch.sign(total_grad[view])
+                    self.univ_pert[view] = torch.clamp(self.univ_pert[view], -cfg.epsilon, cfg.epsilon)
                 print(f"Loss per epoch: {loss_per_epoch}")
-                self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sign(total_grad)
-                self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
-                if cfg.log:
-                    wandb.log({"loss_per_epoch": loss_per_epoch, "epoch": self.epoch, 
-                               "mean_perturbation": torch.mean(self.univ_pert).item(), "std_perturbation": torch.std(self.univ_pert).item(),
-                               "L2_norm_perturbation": torch.norm(self.univ_pert).item()})
-                print(f"L2 norm of the perturbation: {torch.norm(self.univ_pert)}")
-                print(f"Shape of the perturbation: {self.univ_pert.shape}")
-                print(f"Mean and std of the perturbation: {torch.mean(self.univ_pert)}, {torch.std(self.univ_pert)}")
+                for view in views:
+                    if cfg.log:
+                        wandb.log({f"mean_pert_{view}": torch.mean(self.univ_pert[view]).item(), f"std_pert_{view}": torch.std(self.univ_pert[view]).item()})
+                    else:
+                        print(f"Mean and std of perturbation for {view}: {torch.mean(self.univ_pert[view]).item()}, {torch.std(self.univ_pert[view]).item()}")
                 # f_perturbation = fft2(self.univ_pert[0].squeeze(0).permute(1, 2, 0).cpu().detach().numpy())
                 # # visualize the magnitude of the perturbation spectrum
                 # plt.imshow(np.log(np.abs(f_perturbation)+1))
@@ -573,7 +594,7 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                     step_log.update(runner_log)
                     test_mean_score= runner_log['test/mean_score']
                     print(f"Test mean score: {test_mean_score}")
-                    save_name = f'pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}_step_loss.pkl'
+                    save_name = f'pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{cfg.view}.pkl'
                     if cfg.log:
                         wandb.log({"test_mean_score": test_mean_score, "epoch": self.epoch})
                     if cfg.retrain:
@@ -581,6 +602,9 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                     elif cfg.targeted:
                         # patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}_ker_{cfg.kernel_size}_with_reg{cfg.eta}.pkl')
                         patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'tar_{save_name}')
+                        perturbations = cfg.perturbations.copy()
+                        perturbations = torch.tensor(perturbations).cpu()
+                        self.univ_pert['perturbations'] = perturbations
                     else:
                         # patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_pert_{cfg.epsilon}_epoch_{self.epoch}_mean_score_{test_mean_score}_{view}_ker_{cfg.kernel_size}_with_reg{cfg.eta}.pkl')
                         patch_path = os.path.join(os.path.dirname(cfg.checkpoint), f'untar_{save_name}')
@@ -588,11 +612,11 @@ class TrainBETUniPertImageWorkspaceDP(BaseWorkspace):
                 self.epoch += 1
                 json_logger.log(step_log)
                 self.global_step += 1
-        if cfg.targeted:
-            gradients_path = os.path.join(os.path.dirname(cfg.checkpoint), f'gradients_tar_{save_name}')
-        else:
-            gradients_path = os.path.join(os.path.dirname(cfg.checkpoint), f'gradients_untar_{save_name}')
-        pickle.dump(gradients, open(gradients_path, 'wb'))
+        # if cfg.targeted:
+        #     gradients_path = os.path.join(os.path.dirname(cfg.checkpoint), f'gradients_tar_{save_name}')
+        # else:
+        #     gradients_path = os.path.join(os.path.dirname(cfg.checkpoint), f'gradients_untar_{save_name}')
+        # pickle.dump(gradients, open(gradients_path, 'wb'))
         if cfg.log:
             wandb.finish()
 

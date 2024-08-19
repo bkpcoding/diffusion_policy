@@ -142,7 +142,7 @@ class PushTImageRunner(BaseImageRunner):
         self.max_steps = max_steps
         self.tqdm_interval_sec = tqdm_interval_sec
     
-    def run(self, policy: BaseImagePolicy):
+    def run(self, policy: BaseImagePolicy, adversarial_patch=None, cfg=None):
         device = policy.device
         dtype = policy.dtype
         env = self.env
@@ -151,7 +151,13 @@ class PushTImageRunner(BaseImageRunner):
         n_envs = len(self.env_fns)
         n_inits = len(self.env_init_fn_dills)
         n_chunks = math.ceil(n_inits / n_envs)
-
+        if cfg is not None:
+            if cfg.view == 'both':
+                views = ['agentview_image', 'robot0_eye_in_hand_image']
+            elif cfg.view == 'None':
+                views = []
+            else:
+                views = [cfg.view]
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
@@ -170,7 +176,7 @@ class PushTImageRunner(BaseImageRunner):
             assert len(this_init_fns) == n_envs
 
             # init envs
-            env.call_each('run_dill_function', 
+            env.call_each('run_dill_function',
                 args_list=[(x,) for x in this_init_fns])
 
             # start rollout
@@ -188,16 +194,18 @@ class PushTImageRunner(BaseImageRunner):
                     # TODO: not tested
                     np_obs_dict['past_action'] = past_action[
                         :,-(self.n_obs_steps-1):].astype(np.float32)
-                
-                # device transfer
+                 # device transfer
                 obs_dict = dict_apply(np_obs_dict, 
                     lambda x: torch.from_numpy(x).to(
                         device=device))
+                if adversarial_patch is not None and cfg is not None:
+                    for view in views:
+                        obs_dict[view]  = obs_dict[view] + adversarial_patch[view].to(device)
+                        obs_dict[view] = torch.clamp(obs_dict[view], cfg.clip_min, cfg.clip_max)
 
                 # run policy
                 with torch.no_grad():
                     action_dict = policy.predict_action(obs_dict)
-
                 # device_transfer
                 np_action_dict = dict_apply(action_dict,
                     lambda x: x.detach().to('cpu').numpy())
@@ -208,6 +216,15 @@ class PushTImageRunner(BaseImageRunner):
                 obs, reward, done, info = env.step(action)
                 done = np.all(done)
                 past_action = action
+                if cfg is not None:
+                    if cfg.targeted and cfg.log:
+                        try:
+                        # log the l1 distance between the predicted action and the target action per environment
+                            target_action = action_dict['action'].to('cpu') + adversarial_patch['perturbations'].to('cpu')
+                            for i in range(target_action.shape[-1]):
+                                wandb.log({f"l1_distance_{i}": torch.norm(action_dict['action'][:,:,i].to('cpu') - target_action[:,:,i], p=1) / target_action.shape[0]})
+                        except KeyError:
+                            pass
 
                 # update pbar
                 pbar.update(action.shape[1])

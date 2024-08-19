@@ -225,7 +225,6 @@ class PushTKeypointsRunner(BaseLowdimRunner):
                 # handle latency_steps, we discard the first n_latency_steps actions
                 # to simulate latency
                 action = np_action_dict['action'][:,self.n_latency_steps:]
-
                 # step env
                 obs, reward, done, info = env.step(action)
                 done = np.all(done)

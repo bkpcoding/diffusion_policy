@@ -27,7 +27,11 @@ import pickle
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, ArtistAnimation
 from pathlib import Path
-
+import random
+# for deterministic results
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'  # or ':16:8'
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 def create_env(env_meta, shape_meta, enable_render=True):
     modality_mapping = collections.defaultdict(list)
@@ -42,6 +46,14 @@ def create_env(env_meta, shape_meta, enable_render=True):
         use_image_obs=enable_render, 
     )
     return env
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
 
 class RobomimicImageRunner(BaseImageRunner):
     """
@@ -251,6 +263,7 @@ class RobomimicImageRunner(BaseImageRunner):
         device = policy.device
         dtype = policy.dtype
         env = self.env
+        torch.use_deterministic_algorithms(True)
         
         # plan for rollout
         n_envs = len(self.env_fns)
@@ -268,6 +281,8 @@ class RobomimicImageRunner(BaseImageRunner):
         except:
             obs_encoder = policy.obs_encoder
         image_encoder = obs_encoder.obs_nets['robot0_eye_in_hand_image']
+        policy.eval()
+        # set_seed(1024)
 
         for chunk_idx in range(n_chunks):
             start = chunk_idx * n_envs
@@ -294,7 +309,12 @@ class RobomimicImageRunner(BaseImageRunner):
             env_name = self.env_meta['env_name']
             pbar = tqdm.tqdm(total=self.max_steps, desc=f"Eval {env_name}Image {chunk_idx+1}/{n_chunks}", 
                 leave=False, mininterval=self.tqdm_interval_sec)
-            
+            if cfg.view == 'both':
+                views = ['agentview_image', 'robot0_eye_in_hand_image']
+            elif cfg.view == 'None':
+                views = []
+            else:
+                views = [cfg.view]
             done = False
             while not done:
                 # create obs dict
@@ -308,54 +328,76 @@ class RobomimicImageRunner(BaseImageRunner):
                 obs_dict = dict_apply(np_obs_dict, 
                     lambda x: torch.from_numpy(x).to(
                         device=device))
+                # print(f"Min and Max of obs_dict: {torch.min(obs_dict['robot0_eye_in_hand_image'])}, {torch.max(obs_dict['robot0_eye_in_hand_image'])}")
                 clean_obs_dict = obs_dict.copy()
                 random_obs_dict = obs_dict.copy()
                 if adversarial_patch is not None:
-                    obs_dict[cfg.view] = obs_dict[cfg.view] + adversarial_patch.to(device)
-                    obs_dict[cfg.view] = torch.clamp(obs_dict[cfg.view], cfg.clip_min, cfg.clip_max)
-                    maximum_perturbation = torch.max(torch.abs(adversarial_patch))
-                    random_perturbation = torch.rand_like(obs_dict[cfg.view]) * 2 * maximum_perturbation - maximum_perturbation
-                    random_obs_dict[cfg.view] = random_obs_dict[cfg.view] + random_perturbation
+                    for view in views:
+                        obs_dict[view] = obs_dict[view] + adversarial_patch[view].to(device)
+                        obs_dict[view] = torch.clamp(obs_dict[view], cfg.clip_min, cfg.clip_max)
+                    # maximum_perturbation = torch.max(torch.abs(adversarial_patch))
+                    # random_perturbation = torch.rand_like(obs_dict[cfg.view]) * 2 * maximum_perturbation - maximum_perturbation
+                    # random_obs_dict[cfg.view] = random_obs_dict[cfg.view] + random_perturbation
                 obs_dict = dict_apply(obs_dict, lambda x: x.to(device=device))
                 # run policy
                 with torch.no_grad():
+                    # calculate the l2 distance clean and obs_dict
                     clean_action_dict = policy.predict_action(clean_obs_dict)
                     action_dict = policy.predict_action(obs_dict)
-                    random_action_dict = policy.predict_action(random_obs_dict)
+                    # clean_output = policy.predict_action(clean_obs_dict, return_latent=True)['output']
+                    # output = policy.predict_action(obs_dict, return_latent=True)['output']
+                    # latents = policy.predict_action(obs_dict, return_latent=True)
+                    # clean_latents = policy.predict_action(clean_obs_dict, return_latent=True)
+                    # # print("L2 distance between clean and adversarial output: ", torch.norm(clean_output - output, p=2) / output.shape[0])
+                    # print(latents['latent'])
+                    # print(clean_latents['latent'])
+                    # print("L2 distance between clean and adversarial latents: ", torch.norm(clean_latents['latent'][0].float() - latents['latent'][0].float(), p=2) / latents['latent'][0].shape[0])
+                    # random_action_dict = policy.predict_action(random_obs_dict)
                 observations.append(obs_dict['robot0_eye_in_hand_image'][vis_envs].detach().cpu().numpy())
                 # print(f"observations appending has shape {observations[0].shape}")
                 # device_transfer
                 try:
                     np_action_dict = dict_apply(action_dict,
                         lambda x: x.detach().to('cpu').numpy())
-                    np_clean_action_dict = dict_apply(clean_action_dict,
-                        lambda x: x.detach().to('cpu').numpy())
-                    np_random_action_dict = dict_apply(random_action_dict,
-                        lambda x: x.detach().to('cpu').numpy())
+                    # np_clean_action_dict = dict_apply(clean_action_dict,
+                    #     lambda x: x.detach().to('cpu').numpy())
+                    # np_random_action_dict = dict_apply(random_action_dict,
+                    #     lambda x: x.detach().to('cpu').numpy())
                     action = np_action_dict['action']
-                    clean_actions = np_clean_action_dict['action']
-                    random_actions = np_random_action_dict['action']
+                    # clean_actions = np_clean_action_dict['action']
+                    # random_actions = np_random_action_dict['action']
                 except AttributeError:
                     action = action_dict['action'].detach().to('cpu').numpy()
-                features = np_action_dict['features']
-                clean_features = np_clean_action_dict['features']
-                random_features = np_random_action_dict['features']
-                features = np.mean(features, axis=0)
-                actions = np.mean(action, axis=0)
-                clean_actions = np.mean(clean_actions, axis=0)
-                clean_features = np.mean(clean_features, axis=0)
-                random_features = np.mean(random_features, axis=0)
-                random_actions = np.mean(random_actions, axis=0)
+                # l1 distance between actions and clean actions before perturbation
+                # for i in range(action.shape[-1]):
+                #     print(f"l1_distance_{i}: {torch.norm(action_dict['action'][:,:,i] - clean_action_dict['action'][:,:,i], p=1) / action.shape[0]}")
+                if cfg.targeted and cfg.log:
+                    try:
+                    # log the l1 distance between the predicted action and the target action per environment
+                        target_action = clean_action_dict['action'].to('cpu') + adversarial_patch['perturbations'].to('cpu')
+                        for i in range(target_action.shape[-1]):
+                            wandb.log({f"l1_distance_{i}": torch.norm(action_dict['action'][:,:,i].to('cpu') - target_action[:,:,i], p=1) / target_action.shape[0]})
+                    except KeyError:
+                        pass
+                # features = np_action_dict['features']
+                # clean_features = np_clean_action_dict['features']
+                # random_features = np_random_action_dict['features']
+                # features = np.mean(features, axis=0)
+                # actions = np.mean(action, axis=0)
+                # clean_actions = np.mean(clean_actions, axis=0)
+                # clean_features = np.mean(clean_features, axis=0)
+                # random_features = np.mean(random_features, axis=0)
+                # random_actions = np.mean(random_actions, axis=0)
                 # l2 distance between features
-                diff = np.linalg.norm(features - clean_features)
-                diff_actions = np.linalg.norm(actions - clean_actions)
-                diff_random = np.linalg.norm(random_features - clean_features)
-                diff_random_actions = np.linalg.norm(random_actions - clean_actions)
+                # diff = np.linalg.norm(features - clean_features)
+                # diff_actions = np.linalg.norm(actions - clean_actions)
+                # diff_random = np.linalg.norm(random_features - clean_features)
+                # diff_random_actions = np.linalg.norm(random_actions - clean_actions)
                 # print(f"Diff: {diff}, Random Diff: {diff_random}")
                 # print(f"Diff Actions: {diff_actions}, Random Diff Actions: {diff_random_actions}")
-                if cfg.log:
-                    wandb.log({"Diff": diff, "Random Diff": diff_random, 
-                                "Diff Actions": diff_actions, "Random Diff Actions": diff_random_actions})
+                # if cfg.log:
+                #     wandb.log({"Diff": diff, "Random Diff": diff_random, 
+                #                 "Diff Actions": diff_actions, "Random Diff Actions": diff_random_actions})
                 if not np.all(np.isfinite(action)):
                     print(action)
                     raise RuntimeError("Nan or Inf action")
@@ -494,10 +536,15 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
             loss = mse_loss(predicted_action, action)
             loss = -loss
         else:
-            loss = mse_loss(predicted_action, action)
+            # loss = mse_loss(predicted_action, action)
+            # apply loss for the first two dimensions of the action
+            loss = mse_loss(predicted_action[:,:, :2], action[:,:, :2])
         loss.backward()
         if cfg.log:
             wandb.log({"Loss": loss.item()})
+            # log per dimension mse loss for predicted_action and action
+            for i in range(7):
+                wandb.log({f"Loss{i}d": mse_loss(predicted_action[:,:, i], action[:,:, i])})
         for view in views:
             # assert obs_dict_copy[view].grad_fn is not None, "Input tensor does not have a grad_fn"
             grad = torch.sign(obs_dict[view].grad)
@@ -1323,6 +1370,7 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
             done = False
             average_perturbation = 0
             perturbed_obs_dicts = []
+            timestep = 0
             # clean_obs_dicts = []
 
             while not done:
@@ -1435,19 +1483,26 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
 
 
                 # run policy
-                random_noise_dict = clean_obs_dict.copy()
+                # random_noise_dict = clean_obs_dict.copy()
                 # for view in views:
                 #     random_noise = torch.FloatTensor(obs_dict[view].shape).uniform_(-self.epsilon, self.epsilon).to(obs_dict[view].device)
                 #     random_noise_dict[view] = random_noise_dict[view] + random_noise
                 #     random_noise_dict[view] = torch.clamp(random_noise_dict[view], 0, 1)
+                energy_save_path = f"/teamspace/studios/this_studio/bc_attacks/diffusion_policy/plots/pkl_files/"
+                pickle.dump(obs_dict, open(f"{energy_save_path}ibc_perturbed_obs_dict_{self.epsilon}_timestep_{timestep}.pkl", "wb"))
+                pickle.dump(clean_obs_dict, open(f"{energy_save_path}ibc_clean_obs_dict_{self.epsilon}_timestep_{timestep}.pkl", "wb"))
                 with torch.no_grad():
                     action_dict = policy.predict_action(obs_dict, return_energy=True)
-                    clean_dict = policy.predict_action(clean_obs_dict)
+                    clean_dict = policy.predict_action(clean_obs_dict, return_energy=True)
+                    perturbed_energy = action_dict['energy'].detach().to('cpu').numpy()
+                    clean_energy = clean_dict['energy'].detach().to('cpu').numpy()
                     # random_dict = policy.predict_action(random_noise_dict, return_energy=True)
                     # print(f"Clean energy {torch.max(clean_energy)}")
                     # print(f"Perturbed energy {torch.max(action_dict['energy'])}")
                     # print(f"Random energy {torch.max(random_dict['energy'])}")
                 # perturbed_obs_dicts.append(obs_dict)
+                pickle.dump(clean_energy, open(f"{energy_save_path}ibc_clean_energy_{self.epsilon}_timestep_{timestep}.pkl", "wb"))
+                pickle.dump(perturbed_energy, open(f"{energy_save_path}ibc_perturbed_energy_{self.epsilon}_timestep_{timestep}.pkl", "wb"))
 
                 # device_transfer
                 np_action_dict = dict_apply(action_dict,
@@ -1477,6 +1532,7 @@ class AdversarialRobomimicImageRunnerIBC(RobomimicImageRunner):
                 obs, reward, done, info = env.step(env_action)
                 done = np.all(done)
                 past_action = action
+                timestep += 1
 
                 # update pbar
                 pbar.update(action.shape[1])

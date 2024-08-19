@@ -243,8 +243,11 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         global_cond = None
         if self.obs_as_global_cond:
             # condition through global feature
+            for key in nobs.keys():
+                print(f"Key: {key} and shape: {nobs[key].shape}")
             this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
             this_nobs = dict_apply(this_nobs, lambda x: x.to(device))
+            print("This nobs shape: ", this_nobs['agentview_image'].shape)
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
             global_cond = nobs_features.reshape(B, -1)
@@ -282,7 +285,7 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         result = {
             'action': action,
             'action_pred': action_pred, 
-            'trajectories': self.trajectories,
+            # 'trajectories': self.trajectories,
         }
         return result
 

@@ -333,6 +333,12 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
             output_dir=self.output_dir)
         assert isinstance(env_runner, BaseImageRunner)
 
+        if cfg.log:
+            wandb.init(
+                project="offline_bc_evaluation",
+                name=f"ibc_dfo_{cfg.epsilon}_targeted_{cfg.targeted}_view_{cfg.view}"
+            )
+            wandb.log({"epsilon": cfg.epsilon, "epsilon_step": cfg.epsilon_step, "targeted": cfg.targeted, "view": cfg.view})
 
         # save batch for sampling
         train_sampling_batch = None
@@ -343,10 +349,6 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
         self.model.to(cfg.device)
 
         device = cfg.device
-
-        # initialize the universal perturbation
-        self.univ_pert = torch.zeros((3, 84, 84), device=device)
-        view = cfg.view
 
         if cfg.training.debug:
             cfg.training.num_epochs = 2
@@ -366,7 +368,16 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
             low = naction_stats['min'],
             high=naction_stats['max']
         )
+        image_shape = cfg.task['image_shape']
         samples = action_dist.sample((B, self.model.train_n_neg, Ta)).to(dtype=torch.float32, device=device)
+        self.univ_pert = {}
+        if cfg.view == 'both':
+            views = ['agentview_image', 'robot0_eye_in_hand_image']
+        else:
+            views = [cfg.view]
+        for view in views:
+            # self.univ_pert[view] = torch.zeros((3, 84, 84)).to(device)
+            self.univ_pert[view] = torch.zeros((image_shape[0], image_shape[1], image_shape[2])).to(device)
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         gradients = {}
@@ -376,21 +387,22 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
                 # ========= train for this epoch ==========
                 train_losses = list()
                 loss_per_epoch = 0
-                total_grad = torch.zeros((1, 2, 3, 84, 84), device=device)
+                total_grad = {}
+                for view in views:
+                    total_grad[view] = torch.zeros((1, cfg.n_obs_steps, image_shape[0], image_shape[1], image_shape[2])).to(device)
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
                         self.model.zero_grad()
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                        obs = batch['obs']
-                        if batch['obs']['agentview_image'].shape[0] != cfg.dataloader.batch_size:
-                            continue
+                        obs = batch['obs'].copy()
+                        for view in views:
+                            obs[view] = obs[view] + self.univ_pert[view]
+                            # clamp the observation to be between 0 and 1
+                            obs[view] = torch.clamp(obs[view], 0, 1)
+                            obs[view].requires_grad = True
                         obs = dict_apply(obs, lambda x: x.to(device, non_blocking=True))
-                        obs[view] = obs[view] + self.univ_pert
-                        # clamp the observation to be between clip_min and clip_max
-                        obs[view] = torch.clamp(obs[view], cfg.clip_min, cfg.clip_max)
-                        obs[view].requires_grad = True
                         with torch.no_grad():
                             predicted_action = self.model.predict_action(batch['obs'])['action']
                         if cfg.targeted:
@@ -407,7 +419,6 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
                             actions = self.model.predict_action(obs, return_energy=True)
                             action = actions['action']
                             energy = actions['energy']
-                            print(energy.shape)
                             raw_loss = -torch.max(energy, dim=1)[0]
                             raw_loss = raw_loss.sum()
                             # move to device
@@ -425,8 +436,9 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
                             continue
                         loss.backward()
                         loss_per_epoch += loss.item()
-                        total_grad += obs[view].grad.sum(dim=0, keepdim=True)
-
+                        for view in views:
+                            total_grad[view] += obs[view].grad.sum(dim=0, keepdim=True)[:, :cfg.n_obs_steps, ...]
+ 
                         # logging
                         raw_loss_cpu = raw_loss.item()
                         tepoch.set_postfix(loss=raw_loss_cpu, refresh=False)
@@ -441,14 +453,15 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
                         if (cfg.training.max_train_steps is not None) \
                             and batch_idx >= (cfg.training.max_train_steps-1):
                             break
-                gradients[self.epoch] = total_grad
-                self.univ_pert = self.univ_pert + cfg.epsilon_step * torch.sign(total_grad)
-                self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
-                print(f"Loss per epoch: {loss_per_epoch}")
+                for view in views:
+                    self.univ_pert[view] = self.univ_pert[view] + cfg.epsilon_step * torch.sign(total_grad[view])
+                    self.univ_pert[view] = torch.clamp(self.univ_pert[view], -cfg.epsilon, cfg.epsilon)
+                print(f"Loss for {self.epoch}: {loss_per_epoch}")
                 if cfg.log:
-                    wandb.log({"loss_per_epoch": loss_per_epoch, "epoch": self.epoch})
-                print(f"L2 norm of the perturbation: {torch.norm(self.univ_pert)}")
-                print(f"Linf norm of the perturbation: {torch.max(torch.abs(self.univ_pert))}")
+                    wandb.log({"loss": loss_per_epoch, "epoch": self.epoch})
+                # print(f"Linf norm of the perturbation: {torch.norm(self.univ_pert, p=float('inf'))}")
+                for view in views:
+                    print(f"L2 norm of the {view} perturbation: {torch.norm(self.univ_pert[view], p=2)}")
                 # at the end of each epoch
                 # replace train_loss with epoch average
                 train_loss = np.mean(train_losses)
@@ -459,8 +472,8 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
                 policy.eval()
 
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch > 0:
-                    runner_log = env_runner.run(policy)
+                if (self.epoch % cfg.training.rollout_every) == 0:
+                    runner_log = env_runner.run(policy, cfg=cfg)
                     # log all
                     step_log.update(runner_log)
                     test_mean_score= runner_log['test/mean_score']

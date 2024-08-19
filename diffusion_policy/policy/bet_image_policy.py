@@ -140,14 +140,34 @@ class BETImagePolicy(BaseImagePolicy):
         """
         obs = dict_apply(obs_dict, lambda x: x.to(self.device).requires_grad_(True))
         nobs = self.normalizer.normalize(obs)
-        this_obs = dict_apply(nobs, lambda x: x[:, :self.n_obs_steps, ...].reshape(-1, *x.shape[2:]))
-        nobs_features = self.obs_encoder(this_obs)
-        # reshape back to B, To, Do
-        nobs_features = nobs_features.reshape(-1, self.n_obs_steps, self.obs_feature_dim)
+        value = next(iter(nobs.values()))
+        B, _, C, H, W = nobs['image'].shape
+        B, To = value.shape[:2]
+        T = self.horizon
+        # To = self.n_obs_steps
+        obs = torch.full((B,T,C,H,W), -2, dtype=nobs['image'].dtype, device=nobs['image'].device)
+        agent_pos = torch.full((B, T, 2), -2, dtype=nobs['agent_pos'].dtype, device=nobs['agent_pos'].device)
+        obs[:,:To,:] = nobs['image'][:,:To,:]
+        agent_pos[:,:To,:] = nobs['agent_pos'][:,:To,:]
+        obs = {'image': obs, 'agent_pos': agent_pos}
+        # or 
+        # nobs['image'][:,To:,:] = -2
+        obs = dict_apply(obs, lambda x: x.reshape(-1, *x.shape[2:]))
+        nobs_features = self.obs_encoder(obs)
+        # reshape back to B, T, Do
+        nobs_features = nobs_features.reshape(-1, T, self.obs_feature_dim)
         latent = self.state_prior.generate_latents(nobs_features)
+        output = self.state_prior.generate_latents(nobs_features, return_output=True)
         if return_latent:
-            return {'latent': latent}
+            return {'latent': latent, 'output': output}
         action = self.action_ae.decode_actions(latent, nobs_features)
+        # unnormalize the actions
+        action = self.normalizer['action'].unnormalize(action)
+        start = self.n_obs_steps - 1
+        end = start + self.n_action_steps
+        # print("Start and end", start, end)
+        action = action[:, start:end]
+
         return {'action': action, 'features': nobs_features}
 
     # ========= training  ============
@@ -191,16 +211,21 @@ class BETImagePolicy(BaseImagePolicy):
         assert 'valid_mask' not in batch
         nobs = self.normalizer.normalize(batch['obs'])
         naction = self.normalizer['action'].normalize(batch['action'])
-
         # mask out observations after n_obs_steps
         B = naction.shape[0]
-        To = self.n_obs_steps
+        # To = self.n_obs_steps
+        T = self.horizon
         this_nobs = dict_apply(nobs, 
-            lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:]))
+            lambda x: x[:, :T, ...].reshape(-1, *x.shape[2:]))
         # nobs[:,To:,:] = -2 # (normal obs range [-1,1])
+        # the shape of this_nobs['image'] now is 256*10 x 3 x 76 x 76 
         nobs_features = self.obs_encoder(this_nobs)
+        # print(f'obs_features shape: {nobs_features.shape}')
+        # nobs_features = self.obs_encoder(nobs)
         # reshape nobs_features to B, To, Do
-        nobs_features = nobs_features.reshape(B, To, -1)
+        nobs_features = nobs_features.reshape(B, T, -1)
+        # mask out observations after n_obs_steps
+        nobs_features[:,self.n_obs_steps:,:] = -2
         # print(f'obs_features shape: {nobs_features.shape}')
         latent = self.action_ae.encode_into_latent(naction, nobs_features)
         # print(f'latent {latent}')

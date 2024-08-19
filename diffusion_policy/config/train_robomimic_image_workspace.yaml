@@ -1,6 +1,7 @@
 defaults:
   - _self_
-  - task: lift_image
+  # - task: lift_image_abs
+  - task: pusht_image
 
 name: train_robomimic_image
 _target_: diffusion_policy.workspace.train_robomimic_image_workspace.TrainRobomimicImageWorkspace
@@ -17,17 +18,22 @@ n_latency_steps: 0
 dataset_obs_steps: *horizon
 past_action_visible: False
 keypoint_visible_rate: 1.0
-
+save_video: True
+n_vis: 3
+log: False
+targeted: False
+view: 'None'
+patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vanilla_bc/train_0/checkpoints/untar_pert_0.0625_epoch_50_mean_score_0.6428571428571429_robot0_eye_in_hand_image_ild.pkl'
 policy:
   _target_: diffusion_policy.policy.robomimic_image_policy.RobomimicImagePolicy
   shape_meta: ${shape_meta}
-  algo_name: bc_rnn
+  algo_name: bc
   obs_type: image
   # oc.select resolver: key, default
   task_name: ${oc.select:task.task_name,lift}
   dataset_type: ${oc.select:task.dataset_type,ph}
   crop_shape: [76,76]
-  use_resnet50: True
+  use_resnet50: False
 
 dataloader:
   batch_size: 64
@@ -44,16 +50,16 @@ val_dataloader:
   persistent_workers: False
 
 training:
-  device: "cpu"
+  device: "cuda:0"
   seed: 1023
   debug: False
   resume: True
   # optimization
-  num_epochs: 600
+  num_epochs: 60
   # training loop control
   # in epochs
-  rollout_every: 100
-  checkpoint_every: 100
+  rollout_every: 15
+  checkpoint_every: 15
   val_every: 100
   sample_every: 100
   # steps per epoch
@@ -63,7 +69,7 @@ training:
   tqdm_interval_sec: 1.0
 
 logging:
-  project: lstm_gmm_image_policy
+  project: vanilla_bc_image_policy
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}_${training.seed}_${policy.algo_name}

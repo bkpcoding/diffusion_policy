@@ -1,23 +1,27 @@
 defaults:
   - _self_
-  - task: lift_image
+# - task: lift_image
+  - task: pusht_image
 
 name: train_robomimic_image
 # _target_: diffusion_policy.workspace.train_robomimic_image_workspace.TrainRobomimicImageWorkspace
 _target_: diffusion_policy.workspace.train_robomimic_image_workspace.TrainRobomimicUniPertImageWorkspaceRNN
 epsilon: 0.0625
 epsilon_step: 0.01
-checkpoints: 
-    train0: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_0/checkpoints/epoch=1100-test_mean_score=1.000.ckpt'
-    train1: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_1/checkpoints/epoch=0300-test_mean_score=1.000.ckpt'
-    train2: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_2/checkpoints/epoch=0300-test_mean_score=1.000.ckpt'
-
-checkpoint: ${checkpoints.train1}
+checkpoints:
+    # train0: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_0/checkpoints/epoch=1100-test_mean_score=1.000.ckpt'
+    # train1: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_1/checkpoints/epoch=0300-test_mean_score=1.000.ckpt'
+    # train2: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/lstm_gmm/train_2/checkpoints/epoch=0300-test_mean_score=1.000.ckpt'
+    train0: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/pusht/lstm_gmm/train_0/checkpoints/epoch=0150-test_mean_score=0.742.ckpt'
+    train1: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/pusht/lstm_gmm/train_1/checkpoints/epoch=0250-test_mean_score=0.654.ckpt'
+    train2: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/pusht/lstm_gmm/train_2/checkpoints/epoch=1000-test_mean_score=0.662.ckpt'
+checkpoint: ${checkpoints.train0}
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
-view: "robot0_eye_in_hand_image"
+# view: "robot0_eye_in_hand_image"
+view: "image"
 # view: 'agentview_image'
 clip_min: 0
 clip_max: 1
@@ -30,7 +34,7 @@ past_action_visible: False
 keypoint_visible_rate: 1.0
 targeted: False
 perturbations: [0.25, 0.25, 0, 0, 0, 0, 0]
-log: True
+log: False
 save_video: False
 n_vis: 3
 
@@ -59,7 +63,7 @@ val_dataloader:
   persistent_workers: False
 
 training:
-  device: "cuda:1"
+  device: "cuda:0"
   seed: 1023
   debug: False
   resume: True

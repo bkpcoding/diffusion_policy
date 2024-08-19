@@ -24,8 +24,8 @@ epsilon: 0.0625
 clip_min: 0
 clip_max: 1
 view: 'both'
-num_iter: 1
-num_epochs: 1
+num_iter: 20
+num_epochs: 5
 rand_int: True
 eps_iter: 0.01
 norm: 'linf'

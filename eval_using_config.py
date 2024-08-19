@@ -34,8 +34,9 @@ def init_wandb(checkpoint, cfg, attack, view):
     # Try to find an existing run with a similar name
     api = wandb.Api()
     # project = "grad_check_adv"
-    # project = "BC_Evaluation"
-    project = "transferability_adv"
+    project = "BC_Evaluation"
+    # project = "transferability_adv"
+    # project = "vanilla_bc_image_policy"
     runs = api.runs(f"sagar8/{project}")
     
     existing_run = None
@@ -61,8 +62,10 @@ def init_wandb(checkpoint, cfg, attack, view):
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_adversarial.yaml')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='vanilla_bc_image_ph_pick_pgd_adversarial.yaml')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_adversarial.yaml')
-@hydra.main(config_path='diffusion_policy/eval_configs', config_name='bet_image_ph_pick_adversarial.yaml')
+# @hydra.main(config_path='diffusion_policy/eval_configs', config_name='bet_image_ph_pick_adversarial.yaml')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_pgd_adversarial.yaml')
+# @hydra.main(config_path='diffusion_policy/eval_configs', config_name='diffusion_policy_image_pusht.yaml')
+@hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_pusht.yaml')
 def main(cfg):
     checkpoint = cfg.checkpoint
     task = cfg.task
@@ -92,9 +95,9 @@ def main(cfg):
         # config_name = 'vanilla_bc_ph_pick_adversarial_patch'
         # config_name = 'ibc_image_ph_pick_adversarial'
         # config_name = 'lstm_gmm_image_ph_pick_adversarial'
-        # config_name = 'bet_image_ph_pick_adversarial'
+        config_name = 'bet_image_ph_pick_adversarial'
         # config_name = 'ibc_image_ph_pick_pgd_adversarial'
-        config_name = 'vanilla_bc_image_ph_pick_pgd_adversarial'
+        # config_name = 'vanilla_bc_image_ph_pick_pgd_adversarial'
         # wandb.log({"xloc": cfg.x_loc, "yloc": cfg.y_loc, "patch_size": cfg.patch_size})
         # config_name = 'lstm_gmm_image_ph_pick_pgd_adversarial'
         config_file_path = to_absolute_path(f"{config_path}/{config_name}.yaml")
@@ -131,8 +134,11 @@ def main(cfg):
         cfg_loaded.task.env_runner['n_test'] = cfg.n_test
     if cfg.n_train > 0:
         cfg_loaded.task.env_runner['n_train'] = cfg.n_train
-
-    cfg_loaded.task.env_runner['dataset_path'] = str(dataset_path)
+    try:
+        cfg_loaded.task.env_runner['dataset_path'] = str(dataset_path)
+    except:
+        print("No dataset path provided")
+        pass
 
     try:
         if cfg_loaded.training.use_ema:
@@ -158,7 +164,7 @@ def main(cfg):
     elif attack:
         runner_log = env_runner.run(policy, cfg.epsilon, cfg)
     else:
-        runner_log = env_runner.run(policy)
+        runner_log = env_runner.run(policy, cfg=cfg)
     json_log = dict()
     for key, value in runner_log.items():
         if isinstance(value, wandb.sdk.data_types.video.Video):

@@ -12,7 +12,12 @@ def get_resnet(name, weights=None, **kwargs):
         return get_r3m(name=name, **kwargs)
 
     func = getattr(torchvision.models, name)
-    resnet = func(weights=weights, **kwargs)
+    if weights == 'None':
+        print(f"********** Loading {name} with random weights **********")
+        resnet = func(**kwargs)
+    else:
+        print(f"********** Loading {name} with {weights} weights **********")
+        resnet = func(weights=weights, **kwargs)
     resnet.fc = torch.nn.Identity()
     return resnet
 

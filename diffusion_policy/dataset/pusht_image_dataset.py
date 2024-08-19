@@ -18,7 +18,7 @@ class PushTImageDataset(BaseImageDataset):
             pad_after=0,
             seed=42,
             val_ratio=0.0,
-            max_train_episodes=None
+            max_train_episodes=None,
             ):
         
         super().__init__()
@@ -33,7 +33,9 @@ class PushTImageDataset(BaseImageDataset):
             mask=train_mask, 
             max_n=max_train_episodes, 
             seed=seed)
-
+        # if n_obs_steps is not None:
+        #     print("********* Changing the horizon to n_obs_steps *********")
+        #     horizon = n_obs_steps
         self.sampler = SequenceSampler(
             replay_buffer=self.replay_buffer, 
             sequence_length=horizon,
@@ -44,6 +46,7 @@ class PushTImageDataset(BaseImageDataset):
         self.horizon = horizon
         self.pad_before = pad_before
         self.pad_after = pad_after
+        self.action_key = 'action'
 
     def get_validation_dataset(self):
         val_set = copy.copy(self)
@@ -69,6 +72,9 @@ class PushTImageDataset(BaseImageDataset):
 
     def __len__(self) -> int:
         return len(self.sampler)
+
+    def get_all_actions(self) -> torch.Tensor:
+        return torch.from_numpy(self.replay_buffer[self.action_key])
 
     def _sample_to_data(self, sample):
         agent_pos = sample['state'][:,:2].astype(np.float32) # (agent_posx2, block_posex3)
