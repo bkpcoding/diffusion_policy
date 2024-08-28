@@ -7,7 +7,27 @@ The project aims to develop Adversarial Attacks on Behavior Cloning Policies to 
 - Diffusion Policy
 - Vector Quantized - Behavior Transformer
 
-The training dataset should go in `./data/robomimic/datasets/` and the checkpoints are stored in `./data/experiments/image/`. 
+The training dataset should go in `./data/robomimic/datasets/` and the checkpoints are stored in `./data/experiments/image/`, you can download pretrained policies as well as data from [here](https://diffusion-policy.cs.columbia.edu/data/). 
+
+## Installations
+You probably need to install libmesa, run this command to install it.
+```console
+$ sudo apt-get install libgl1-mesa-dev libglu1-mesa-dev
+```
+
+I use a custom fork of Robomimic to run the experiments, which you can install by source as follows,
+```console
+$ git clone https://github.com/bkpcoding/robomimic.git
+$ cd robomimic
+$ git checkout v0.2.0
+$ pip install -e .
+```
+
+After that clone this repo and install it,
+```console
+$ git clone https://github.com/bkpcoding/diffusion_policy.git
+$ pip install -e .
+```
 
 ## Offline Attacks (Universal Adversarial Perturbations)
 To run the `offline` attacks (Universal Adversarial Perturbations), you should first train the perturbation on the training dataset.
@@ -26,7 +46,7 @@ In here you have to take care to these parameters,
 
 An example command to develop the adversarial pertubation for Diffusion Policy in offline mode.
 ```console
-python train.py --config-name=train_univ_pert_diffusion_unet_hybrid_workspace.yaml
+$ python train.py --config-name=train_univ_pert_diffusion_unet_hybrid_workspace.yaml
 ```
 
 The perturbation is stored in the checkpoint folder of the policy used, the name is includes whether of the attack is targeted or untargeted, epsilon value
@@ -62,6 +82,6 @@ In this case, I have created a seperate name for the experiments and you can jus
 
 After specifying these parameters, run the command,
 ```console
-python eval_using_config.py
+$ python eval_using_config.py
 ```
 
