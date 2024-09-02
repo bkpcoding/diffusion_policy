@@ -34,10 +34,7 @@ from huggingface_hub import PyTorchModelHubMixin
 from torch import Tensor, nn
 from torch.optim.lr_scheduler import LambdaLR
 from omegaconf import OmegaConf
-from lerobot.common.policies.normalize import Normalize, Unnormalize
-from lerobot.common.policies.utils import get_device_from_parameters, populate_queues
-from lerobot.common.policies.vqbet.configuration_vqbet import VQBeTConfig
-from lerobot.common.policies.vqbet.vqbet_utils import GPT, ResidualVQ
+from diffusion_policy.utils.vq_bet_utils import GPT, ResidualVQ
 from typing import Dict
 
 from robomimic.algo import algo_factory
@@ -313,7 +310,7 @@ class VQBeTModel(nn.Module):
                                                       ONLY this chunk is used in rollout!
     """
 
-    def __init__(self, config: VQBeTConfig):
+    def __init__(self, config):
         super().__init__()
         self.config = config
 
@@ -405,7 +402,7 @@ class VQBeTModel(nn.Module):
 
 
 class VQBeTHead(nn.Module):
-    def __init__(self, config: VQBeTConfig):
+    def __init__(self, config):
         """
         VQBeTHead takes output of GPT layers, and pass the feature through bin prediction head (`self.map_to_cbet_preds_bin`), and offset prediction head (`self.map_to_cbet_preds_offset`)
 
@@ -537,7 +534,7 @@ class VQBeTHead(nn.Module):
                 NT=NT,
             )
 
-        device = get_device_from_parameters(self)
+        device = x.device
         indices = (
             torch.arange(NT, device=device).unsqueeze(1),
             torch.arange(self.vqvae_model.vqvae_num_layers, device=device).unsqueeze(0),
@@ -733,7 +730,7 @@ class VQBeTRgbEncoder(nn.Module):
     Same with DiffusionRgbEncoder from modeling_diffusion.py
     """
 
-    def __init__(self, config: VQBeTConfig):
+    def __init__(self, config):
         super().__init__()
         # Set up optional preprocessing.
         if config.crop_shape is not None:
@@ -842,7 +839,7 @@ def _replace_submodules(
 class VqVae(nn.Module):
     def __init__(
         self,
-        config: VQBeTConfig,
+        config,
     ):
         """
         VQ-VAE is composed of three parts: encoder, vq_layer, and decoder.
