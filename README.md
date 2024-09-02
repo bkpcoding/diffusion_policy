@@ -23,6 +23,10 @@ $ git checkout v0.2.0
 $ pip install -e .
 ```
 
+Install robosuite v1.2.1
+```console
+pip install robosuite==1.2.1
+```
 After that clone this repo and install it,
 ```console
 $ git clone https://github.com/bkpcoding/diffusion_policy.git
