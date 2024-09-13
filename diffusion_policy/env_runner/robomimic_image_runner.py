@@ -276,11 +276,11 @@ class RobomimicImageRunner(BaseImageRunner):
         observations = []
         # randomly select envs to visualize from the n_envs
         vis_envs = np.random.choice(n_envs, cfg.n_vis, replace=False)
-        try:
-            obs_encoder = policy.nets['policy'].nets['encoder'].nets['obs']
-        except:
-            obs_encoder = policy.obs_encoder
-        image_encoder = obs_encoder.obs_nets['robot0_eye_in_hand_image']
+        # try:
+        #     obs_encoder = policy.nets['policy'].nets['encoder'].nets['obs']
+        # except:
+        #     obs_encoder = policy.obs_encoder
+        # image_encoder = obs_encoder.obs_nets['robot0_eye_in_hand_image']
         policy.eval()
         # set_seed(1024)
 
@@ -536,9 +536,9 @@ class AdversarialRobomimicImageRunner(RobomimicImageRunner):
             loss = mse_loss(predicted_action, action)
             loss = -loss
         else:
-            # loss = mse_loss(predicted_action, action)
+            loss = mse_loss(predicted_action, action)
             # apply loss for the first two dimensions of the action
-            loss = mse_loss(predicted_action[:,:, :2], action[:,:, :2])
+            # loss = mse_loss(predicted_action[:,:, :2], action[:,:, :2])
         loss.backward()
         if cfg.log:
             wandb.log({"Loss": loss.item()})
