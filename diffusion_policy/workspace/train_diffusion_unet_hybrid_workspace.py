@@ -163,7 +163,7 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         if train_sampling_batch is None:
                             train_sampling_batch = batch
-                        print(batch['obs']['image'].shape)
+                        print(f"Batch action shape: {batch['action'].shape}")
 
                         # compute loss
                         raw_loss = self.model.compute_loss(batch)
@@ -324,9 +324,9 @@ class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
         view = cfg.view
         device = cfg.training.device
         dataset: BaseImageDataset
-        if cfg.targeted:
-            cfg.task.dataset['dataset_path'] = cfg.pert_dataset
-            print("Changed dataset path to", cfg.task.dataset['dataset_path'])
+        # if cfg.targeted:
+        #     cfg.task.dataset['dataset_path'] = cfg.pert_dataset
+        #     print("Changed dataset path to", cfg.task.dataset['dataset_path'])
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
@@ -408,6 +408,8 @@ class TrainRobomimicUniPertImageWorkspaceDP(BaseWorkspace):
                         # set the requires_grad to true
                         if cfg.targeted:
                             batch['obs'] = obs
+                            print(f"Batch action shape: {batch['action'].shape}, perturbations: {torch.tensor(cfg.perturbations).shape}")
+                            batch['action'] += torch.tensor(cfg.perturbations).to(device)
                             loss = -self.model.compute_loss(batch)
                         else:
                             batch['obs'] = obs
