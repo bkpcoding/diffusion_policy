@@ -18,7 +18,7 @@ from hydra.core.global_hydra import GlobalHydra
 import pickle
 
 
-torch.backends.cudnn.enabled = False
+torch.backends.cudnn.enabled = True
 
 def get_run_name(checkpoint, cfg, attack, view):
     if attack:
@@ -65,7 +65,8 @@ def init_wandb(checkpoint, cfg, attack, view):
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='bet_image_ph_pick_adversarial.yaml')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_pgd_adversarial.yaml')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='diffusion_policy_image_pusht.yaml')
-@hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_pusht.yaml')
+# @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_pusht.yaml')
+@hydra.main(config_path='diffusion_policy/eval_configs', config_name='vqbet_robomimic_image_ph_pick_adversarial.yaml')
 def main(cfg):
     checkpoint = cfg.checkpoint
     task = cfg.task
@@ -77,32 +78,6 @@ def main(cfg):
     dataset_path = cfg.dataset_path
     view = cfg.view
     print(f"Running attack {attack} on {view} view")
-
-    if cfg.log:
-        # wandb.init(project='BC_Evaluation', name=f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-\
-        #     {checkpoint.split("/")[-3]}-{cfg.attack_type}_adversarial_on_{view}_randtar_{cfg.rand_target}' if attack else
-        #   f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-{checkpoint.split("/")[-3]}')
-        # wandb.init(project='BC_Evaluation', id='kfn7tfal', resume='must')
-        # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-rand_target-{cfg.rand_target}-rand_init-{cfg.rand_int}')
-        # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-target_perturbations-{cfg.target_perturbations}-pertubation-{cfg.perturbations[1]}')
-        # wandb.init(project="BC_Evaluation", id='n3nvemg8', resume='must')
-        # wandb.init(project='diffusion_experimentation', name=f'diffusion_policy_norm_monitoring')
-        # wandb.init(project='adv_patch_test', name=f'lstm_gmm_{checkpoint.split("/")[-3]}_{cfg.patch_type}_patch')
-        # wandb.init(project='adv_patch_test', name=f'vanilla_bc_{checkpoint.split("/")[-3]}_{cfg.patch_type}_patch')
-        wandb_run = init_wandb(checkpoint, cfg, attack, view)
-        config_path = 'diffusion_policy/eval_configs'
-        # config_name = 'diffusion_policy_image_ph_pick_pgd_adversarial'
-        # config_name = 'vanilla_bc_ph_pick_adversarial_patch'
-        # config_name = 'ibc_image_ph_pick_adversarial'
-        # config_name = 'lstm_gmm_image_ph_pick_adversarial'
-        config_name = 'bet_image_ph_pick_adversarial'
-        # config_name = 'ibc_image_ph_pick_pgd_adversarial'
-        # config_name = 'vanilla_bc_image_ph_pick_pgd_adversarial'
-        # wandb.log({"xloc": cfg.x_loc, "yloc": cfg.y_loc, "patch_size": cfg.patch_size})
-        # config_name = 'lstm_gmm_image_ph_pick_pgd_adversarial'
-        config_file_path = to_absolute_path(f"{config_path}/{config_name}.yaml")
-        # save the config file to wandb from the hydras config
-        wandb.save(config_file_path)
 
     # the output directory should depend on the current directory and the checkpoint path and the attack type and epsilon
     output_dir = os.path.join(os.getcwd(), f"diffusion_policy/data/experiments/image/{task}/{algo}/eval_{checkpoint.split('/')[-3]}_{epsilon}_{view}")
@@ -146,10 +121,36 @@ def main(cfg):
     except:
         pass
 
+    if cfg.log:
+        # wandb.init(project='BC_Evaluation', name=f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-\
+        #     {checkpoint.split("/")[-3]}-{cfg.attack_type}_adversarial_on_{view}_randtar_{cfg.rand_target}' if attack else
+        #   f'{checkpoint.split("/")[-6]}-{checkpoint.split("/")[-5]}-{checkpoint.split("/")[-4]}-{checkpoint.split("/")[-3]}')
+        # wandb.init(project='BC_Evaluation', id='kfn7tfal', resume='must')
+        # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-rand_target-{cfg.rand_target}-rand_init-{cfg.rand_int}')
+        # wandb.init(project='ibc_pgd_experimentation', name=f'epsilon-{cfg.epsilons[0]}-target_perturbations-{cfg.target_perturbations}-pertubation-{cfg.perturbations[1]}')
+        # wandb.init(project="BC_Evaluation", id='n3nvemg8', resume='must')
+        # wandb.init(project='diffusion_experimentation', name=f'diffusion_policy_norm_monitoring')
+        # wandb.init(project='adv_patch_test', name=f'lstm_gmm_{checkpoint.split("/")[-3]}_{cfg.patch_type}_patch')
+        # wandb.init(project='adv_patch_test', name=f'vanilla_bc_{checkpoint.split("/")[-3]}_{cfg.patch_type}_patch')
+        wandb_run = init_wandb(checkpoint, cfg, attack, view)
+        print("Wandb run initialized", wandb_run)
+        config_path = 'diffusion_policy/eval_configs'
+        # config_name = 'diffusion_policy_image_ph_pick_pgd_adversarial'
+        # config_name = 'vanilla_bc_ph_pick_adversarial_patch'
+        # config_name = 'ibc_image_ph_pick_adversarial'
+        # config_name = 'lstm_gmm_image_ph_pick_adversarial'
+        config_name = 'bet_image_ph_pick_adversarial'
+        # config_name = 'ibc_image_ph_pick_pgd_adversarial'
+        # config_name = 'vanilla_bc_image_ph_pick_pgd_adversarial'
+        # wandb.log({"xloc": cfg.x_loc, "yloc": cfg.y_loc, "patch_size": cfg.patch_size})
+        # config_name = 'lstm_gmm_image_ph_pick_pgd_adversarial'
+        config_file_path = to_absolute_path(f"{config_path}/{config_name}.yaml")
+        # save the config file to wandb from the hydras config
+        wandb.save(config_file_path)
+
     device = torch.device(device)
     policy.to(device)
     policy.eval()
-
     env_runner = hydra.utils.instantiate(
         cfg_loaded.task.env_runner,
         output_dir=output_dir)
@@ -162,7 +163,7 @@ def main(cfg):
         # print(patch[0])
         runner_log = env_runner.run(policy, adversarial_patch=patch, cfg=cfg)
     elif attack:
-        runner_log = env_runner.run(policy, cfg.epsilon, cfg)
+        runner_log = env_runner.run(policy, epsilon=cfg.epsilon, cfg=cfg)
     else:
         runner_log = env_runner.run(policy, cfg=cfg)
     json_log = dict()
