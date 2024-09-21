@@ -397,6 +397,8 @@ class TrainUnivPertIbcDfoHybridWorkspace(BaseWorkspace):
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         obs = batch['obs'].copy()
+                        if batch['obs'][view].shape[0] != B:
+                            continue
                         for view in views:
                             obs[view] = obs[view] + self.univ_pert[view]
                             # clamp the observation to be between 0 and 1
