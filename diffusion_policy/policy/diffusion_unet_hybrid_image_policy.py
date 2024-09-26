@@ -37,6 +37,7 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
             cond_predict_scale=True,
             obs_encoder_group_norm=False,
             eval_fixed_crop=False,
+            use_resnet50=False,
             # parameters passed to step
             **kwargs):
         super().__init__()
@@ -64,13 +65,13 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
                 obs_config['low_dim'].append(key)
             else:
                 raise RuntimeError(f"Unsupported obs type: {type}")
-
         # get raw robomimic config
         config = get_robomimic_config(
             algo_name='bc_rnn',
             hdf5_type='image',
             task_name='square',
-            dataset_type='ph')
+            dataset_type='ph',
+            resnet50=use_resnet50,)
         
         with config.unlocked():
             # set config with shape_meta
@@ -247,7 +248,6 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
                 print(f"Key: {key} and shape: {nobs[key].shape}")
             this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
             this_nobs = dict_apply(this_nobs, lambda x: x.to(device))
-            print("This nobs shape: ", this_nobs['agentview_image'].shape)
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
             global_cond = nobs_features.reshape(B, -1)
@@ -478,6 +478,12 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
 
     def compute_loss(self, batch):
         # normalize input
+        # for key in batch.keys():
+        #     try:
+        #         print(f"Key: {key} and shape: {batch[key].shape}")
+        #     except AttributeError:
+        #         for key2 in batch[key].keys():
+        #             print(f"Key: {key2} and shape: {batch[key][key2].shape}")
         assert 'valid_mask' not in batch
         nobs = self.normalizer.normalize(batch['obs'])
         nactions = self.normalizer['action'].normalize(batch['action'])

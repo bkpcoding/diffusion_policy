@@ -27,7 +27,7 @@ env_runner:
   n_action_steps: ${n_action_steps}
   fps: 10
   past_action: ${past_action_visible}
-  n_envs: null
+  n_envs: 28
 
 dataset:
   _target_: diffusion_policy.dataset.pusht_image_dataset.PushTImageDataset

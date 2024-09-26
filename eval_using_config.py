@@ -66,7 +66,10 @@ def init_wandb(checkpoint, cfg, attack, view):
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_image_ph_pick_pgd_adversarial.yaml')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='diffusion_policy_image_pusht.yaml')
 # @hydra.main(config_path='diffusion_policy/eval_configs', config_name='lstm_gmm_image_pusht.yaml')
-@hydra.main(config_path='diffusion_policy/eval_configs', config_name='vqbet_robomimic_image_ph_pick_adversarial.yaml')
+# @hydra.main(config_path='diffusion_policy/eval_configs', config_name='vqbet_robomimic_image_ph_pick_adversarial.yaml')
+@hydra.main(config_path='diffusion_policy/eval_configs', config_name='ibc_pusht_pgd_adversarial.yaml')
+# @hydra.main(config_path='diffusion_policy/eval_configs', config_name='diffusion_policy_pusht_pgd_adversarial.yaml')
+
 def main(cfg):
     checkpoint = cfg.checkpoint
     task = cfg.task

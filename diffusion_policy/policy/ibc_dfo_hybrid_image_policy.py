@@ -31,6 +31,7 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             obs_encoder_group_norm=True,
             eval_fixed_crop=True,
             crop_shape=(76, 76),
+            use_resnet50=False,
         ):
         super().__init__()
 
@@ -63,7 +64,8 @@ class IbcDfoHybridImagePolicy(BaseImagePolicy):
             algo_name='bc_rnn',
             hdf5_type='image',
             task_name='square',
-            dataset_type='ph')
+            dataset_type='ph',
+            resnet50=use_resnet50,)
         
         with config.unlocked():
             # set config with shape_meta

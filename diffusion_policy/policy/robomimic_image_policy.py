@@ -55,6 +55,7 @@ class RobomimicImagePolicy(BaseImagePolicy):
             dataset_type=dataset_type,
             resnet50=use_resnet50,
             )
+        print("Config: ", config, use_resnet50)
 
         
         with config.unlocked():

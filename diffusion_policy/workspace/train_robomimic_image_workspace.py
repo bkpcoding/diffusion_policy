@@ -324,13 +324,16 @@ class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
         self.model.eval()
         # training loop for the universal perturbation
         self.univ_pert = {}
+        image_shape = cfg.task['image_shape']
         if cfg.view == 'both':
             views = ['agentview_image', 'robot0_eye_in_hand_image']
         else:
             views = [view]
         for view in views:
-            self.univ_pert[view] = torch.zeros((3, 84, 84)).to(device)
+            self.univ_pert[view] = torch.zeros((image_shape[0], image_shape[1], image_shape[2])).to(device)
+            # self.univ_pert[view] = torch.zeros((3, 84, 84)).to(device)
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
+
         gradients = {}
         cfg_activation = {}
         with JsonLogger(log_path) as json_logger:
@@ -342,9 +345,10 @@ class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
                 if cfg.view == 'both':
                     total_grad = {}
                     for view in views:
-                        total_grad[view] = torch.zeros((1, 1, 3, 84, 84)).to(device)
+                        total_grad[view] = torch.zeros((1, cfg.n_obs_steps, image_shape[0], image_shape[1], image_shape[2])).to(device)
                 else:
-                    total_grad = torch.zeros((1, 1, 3, 84, 84)).to(device)
+                    # total_grad = torch.zeros((1, 1, 3, 84, 84)).to(device)
+                    total_grad = torch.zeros((1, 1, image_shape[0], image_shape[1], image_shape[2])).to(device)
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
@@ -353,11 +357,11 @@ class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         orig_obs = batch['obs'].copy()
                         cfg_activation['modify_act'] = False
-                        with torch.no_grad():
-                            prediction2 = self.model.predict_action(orig_obs, cfg_activation=cfg_activation)
-                            predicted_action2 = prediction2['action'].to(device)
-                            predicted_features2 = prediction2['features'].to(device)
-                            representation_dict_orig = self.model.nets['policy'].nets['encoder'].nets['obs'].representation_dict
+                        # with torch.no_grad():
+                        #     prediction2 = self.model.predict_action(orig_obs, cfg_activation=cfg_activation)
+                        #     predicted_action2 = prediction2['action'].to(device)
+                        #     predicted_features2 = prediction2['features'].to(device)
+                        #     representation_dict_orig = self.model.nets['policy'].nets['encoder'].nets['obs'].representation_dict
                         obs = batch['obs'].copy()
                         # apply the patch the view
                         for view in views:
@@ -370,7 +374,8 @@ class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
                         cfg_activation['modify_act'] = False
                         cfg_activation['gamma'] = cfg.gamma
                         # cfg_activation['orig_act'] = representation_dict_orig[self.layers[0]]
-                        prediction = self.model.predict_action(obs, cfg_activation=cfg_activation)
+                        # prediction = self.model.predict_action(obs, cfg_activation=cfg_activation)
+                        prediction = self.model.predict_action(obs)
                         predicted_action = prediction['action'].to(device)
                         predicted_features = prediction['features'].to(device)
                         if cfg.targeted:
@@ -401,8 +406,13 @@ class TrainRobomimicUniPertImageWorkspace(BaseWorkspace):
                         # clip the perturbation
                         # self.univ_pert = torch.clamp(self.univ_pert, -cfg.epsilon, cfg.epsilon)
                 # gradients[self.epoch] = total_grad
-                for view in views:
-                    self.univ_pert[view] = self.univ_pert[view] + cfg.epsilon_step * torch.sign(total_grad[view])
+                if cfg.view != 'image':
+                    for view in views:
+                        self.univ_pert[view] = self.univ_pert[view] + cfg.epsilon_step * torch.sign(total_grad[view])
+                        self.univ_pert[view] = torch.clamp(self.univ_pert[view], -cfg.epsilon, cfg.epsilon)
+                else:
+                    print(f"Total grad shape: {total_grad.shape}, pert shape: {self.univ_pert[view].shape}")
+                    self.univ_pert[view] = self.univ_pert[view] + cfg.epsilon_step * torch.sign(total_grad)
                     self.univ_pert[view] = torch.clamp(self.univ_pert[view], -cfg.epsilon, cfg.epsilon)
                 print(f"Loss for {self.epoch}: {loss_per_epoch}")
                 if cfg.log:

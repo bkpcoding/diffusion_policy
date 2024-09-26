@@ -1,13 +1,26 @@
 defaults:
   - _self_
-  - task: pusht_image
+  - task: lift_image
+
+checkpoints:
+    train0: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vqbet/train_0/checkpoints/epoch=0175-test_mean_score=1.000.ckpt'
+    train1: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vqbet/train_1/checkpoints/epoch=0150-test_mean_score=1.000.ckpt'
+    train2: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vqbet/train_2/checkpoints/epoch=0175-test_mean_score=1.000.ckpt'
+checkpoint: ${checkpoints.train1}
 
 name: train_vq_bet_image
-_target_: diffusion_policy.workspace.train_vq_bet_image_workspace.TrainVQBeTImageWorkspace
+_target_: diffusion_policy.workspace.train_vq_bet_image_workspace.TrainUniPertVQBeTImageWorkspace
 
+
+epsilon: 0.0625
+epsilon_step: 0.01
+attack: True
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
+clip_min: 0
+clip_max: 1
+perturbations: [0.15, 0.15, 0, 0, 0, 0, 0]
 
 horizon: &horizon 2
 n_obs_steps: 1
@@ -18,10 +31,10 @@ past_action_visible: False
 keypoint_visible_rate: 1.0
 save_video: True
 n_vis: 3
-log: True
-targeted: False
-view: 'None'
-patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vanilla_bc/train_0/checkpoints/untar_pert_0.0625_epoch_50_mean_score_0.6428571428571429_robot0_eye_in_hand_image_ild.pkl'
+log: False
+targeted: True
+view: 'both'
+patch_path: '/teamspace/studios/this_studio/bc_attacks/diffusion_policy/data/experiments/image/lift_ph/vqbet/train_0/checkpoints/'
 policy:
     _target_: diffusion_policy.policy.vq_bet_image_policy.VQBeTPolicy
     shape_meta: ${task.shape_meta}
@@ -58,14 +71,14 @@ policy:
 
       # Architecture / modeling.
       # Vision backbone.
-      vision_backbone: resnet50
+      vision_backbone: resnet18
       crop_shape: [84, 84]
       crop_is_random: True
       pretrained_backbone_weights: null
       use_group_norm: True
       spatial_softmax_num_keypoints: 32
       # VQ-VAE
-      n_vqvae_training_steps: 5000
+      n_vqvae_training_steps: 0
       vqvae_n_embed: 16
       vqvae_embedding_dim: 256
       vqvae_enc_hidden_dim: 128
@@ -108,20 +121,20 @@ optimizer:
 
 training:
   device: "cuda:0"
-  seed: 123
+  seed: 1023
   debug: False
   resume: True
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 400
+  num_epochs: 75
   gradient_accumulate_every: 1
   # training loop control
   # in epochs
-  rollout_every: 25
-  checkpoint_every: 25
-  val_every: 25
-  sample_every: 25
+  rollout_every: 15
+  checkpoint_every: 15
+  val_every: 15
+  sample_every: 15
   # steps per epoch
   max_train_steps: null
   max_val_steps: null
@@ -129,22 +142,13 @@ training:
   tqdm_interval_sec: 1.0
 
 logging:
-  project: vq_bet_image_policy
+  project: adversarial_vq_bet_image
   resume: True
   mode: online
-  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}_${training.seed}_${policy.algo_name}
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}_${training.seed}_${policy.algo_name}_univ_pert
   tags: ["${name}", "${task_name}", "${exp_name}"]
   id: null
   group: null
-
-checkpoint:
-  topk:
-    monitor_key: test_mean_score
-    mode: max
-    k: 5
-    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
-  save_last_ckpt: True
-  save_last_snapshot: False
 
 multi_run:
   run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
