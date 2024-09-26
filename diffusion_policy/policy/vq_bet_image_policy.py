@@ -109,12 +109,22 @@ class VQBeTPolicy(BaseImagePolicy):
     @torch.no_grad()
     def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         nobs_dict = self.normalizer(obs_dict)
-        nobs_dict = dict_apply(nobs_dict, lambda x: x[:,0,...])
-        nobs_dict = dict_apply(nobs_dict, lambda x: x.to(nobs_dict['image'].device))
-        nobs_dict['observation.image'] = nobs_dict['image']
-        nobs_dict['observation.state'] = nobs_dict['agent_pos']
-        
-        nobs_dict["observation.images"] = torch.stack([nobs_dict[k] for k in self.expected_image_keys], dim=-4)
+        try:
+            # this is for the pusht environment
+            nobs_dict = dict_apply(nobs_dict, lambda x: x[:,0,...])
+            nobs_dict = dict_apply(nobs_dict, lambda x: x.to(self.device))
+            nobs_dict['observation.image'] = nobs_dict['image']
+            nobs_dict['observation.state'] = nobs_dict['agent_pos']
+            nobs_dict["observation.images"] = torch.stack([nobs_dict[k] for k in self.expected_image_keys], dim=-4)
+        except KeyError:
+            # for the other robomimic environments we have robot0_eye_in_hand_image and agentview_image
+            # for these the dict should contain camera views starting with observation.image
+            nobs_dict = dict_apply(nobs_dict, lambda x: x.to(self.device))
+            nobs_dict['observation.image_robot0'] = nobs_dict['robot0_eye_in_hand_image']
+            nobs_dict['observation.image_agentview'] = nobs_dict['agentview_image']
+            state_keys = ['robot0_eef_pos', 'robot0_eef_quat', 'robot0_gripper_qpos']
+            nobs_dict['observation.state'] = torch.cat([nobs_dict[key] for key in state_keys], dim=-1).squeeze(1)
+            nobs_dict["observation.images"] = torch.stack([nobs_dict[k] for k in self.expected_image_keys], dim=-4).squeeze(1)
         self._queues = self._populate_queues(self._queues, nobs_dict)
 
         if not self.vqbet.action_head.vqvae_model.discretized.item():
@@ -151,15 +161,28 @@ class VQBeTPolicy(BaseImagePolicy):
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
 
-    def compute_loss(self, batch, epoch, validate=False):
+    def compute_loss(self, batch, epoch=None, validate=False):
         nobs = self.normalizer(batch['obs'])
         nactions = self.normalizer['action'].normalize(batch['action'])
-        nobs['observation.image'] = nobs['image']
-        nobs['observation.state'] = nobs['agent_pos']
+        try:
+            nobs['observation.image'] = nobs['image']
+            nobs['observation.state'] = nobs['agent_pos']
+            # set requires grad to True for the observation.image
+            nobs = dict_apply(nobs, lambda x: x.requires_grad_(True))
+        except KeyError:
+            nobs['observation.image_robot0'] = nobs['robot0_eye_in_hand_image']
+            nobs['observation.image_agentview'] = nobs['agentview_image']
+            # stack the state observations from nobs
+            state_keys = ['robot0_eef_pos', 'robot0_eef_quat', 'robot0_gripper_qpos']
+            nobs['observation.state'] = torch.cat([nobs[key] for key in state_keys], dim=-1)
         nobs = dict_apply(nobs, 
             lambda x: x[:,:self.config.n_obs_steps,...])
-
+        nobs = dict_apply(nobs, lambda x: x.requires_grad_(True))
         nobs["observation.images"] = torch.stack([nobs[k] for k in self.expected_image_keys], dim=-4)
+        # set the requires grad to True for the observation image
+        nobs['observation.images'] = nobs['observation.images'].requires_grad_(True)
+        # retain the gradients of the observation image
+        nobs["observation.images"].retain_grad()
         if not self.vqbet.action_head.vqvae_model.discretized.item():
             loss, n_different_codes, n_different_combinations, recon_l1_error = (
                 self.vqbet.action_head.discretize(self.config.n_vqvae_training_steps, nactions)
@@ -169,10 +192,10 @@ class VQBeTPolicy(BaseImagePolicy):
                 "n_different_codes": n_different_codes,
                 "n_different_combinations": n_different_combinations,
                 "recon_l1_error": recon_l1_error,
-            }
+            }, batch
         batch = {'observation.images': nobs['observation.images'], 'observation.state': nobs['observation.state'], 'action': nactions}
         _, loss_dict = self.vqbet(batch, rollout=False)
-        return loss_dict
+        return loss_dict, batch
 
     def on_epoch_end(self, epoch):
         self.vqbet.on_epoch_end(epoch)  # Implement this method in VQBeTModel if needed
@@ -396,6 +419,7 @@ class VQBeTModel(nn.Module):
             )
         # else, it calculate overall loss (bin prediction loss, and offset loss)
         else:
+            # print("Self select target actions indices", self.select_target_actions_indices, batch['action'].shape)
             output = batch["action"][:, self.select_target_actions_indices]
             loss = self.action_head.loss_fn(action_head_output, output, reduction="mean")
             return action_head_output, loss
@@ -768,7 +792,7 @@ class VQBeTRgbEncoder(nn.Module):
         # use the height and width from `config.crop_shape` if it is provided, otherwise it should use the
         # height and width from `config.input_shapes`.
         image_keys = [k for k in config.input_shapes if k.startswith("observation.image")]
-        assert len(image_keys) == 1
+        # assert len(image_keys) == 1
         image_key = image_keys[0]
         dummy_input_h_w = (
             config.crop_shape if config.crop_shape is not None else config.input_shapes[image_key][1:]
